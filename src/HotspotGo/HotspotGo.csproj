@@ -9,7 +9,8 @@
       因此**不需要随程序分发 Microsoft.Windows.SDK.NET.dll**(约 24 MB)。
       .NET 5+ 没有这个能力,必须带那个投影程序集。
 
-      收益:产物 ~15 KB,且 Win10/11 自带 .NET Framework 4.8,目标机零安装。
+      收益:产物约 19 KB(Release 实测 19456 字节),且 Win10/11 自带 .NET Framework 4.8,
+      目标机零安装。
 
     ★ 输出路径用 SDK 默认的 bin\Release\net48\(与目标框架一致,不再有历史遗留目录名)。
       计划任务要指向本 exe 时,以这里的实际输出路径为准。
