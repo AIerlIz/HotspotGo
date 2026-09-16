@@ -6,10 +6,10 @@
 #   如果你的目标其实是"把新版本推到某台固定机器上",那需要一台 self-hosted runner,
 #   可以再加一个 job,与本文件互不影响。
 #
-# 附件:HotspotGo.exe + HotspotGo.exe.sha256,不打包 zip。
+# 附件只有 HotspotGo.exe,不打包 zip,也不另发校验文件:
 #   工具本身已经是单文件,再套一层压缩包只会让下载者多一步解压;
-#   直接放 exe,点一下就能存下来运行。
-#   校验文件是给下载者核对用的 —— 确认拿到的 exe 就是本流水线产出的那一个。
+#   校验更不用自己发 —— GitHub 会给每个附件自动算出 sha256 并显示在 Release 页面上
+#   (资产列表右侧就是,还带一键复制),再发一个 .sha256 文件纯属重复。
 
 name: Release
 
@@ -69,10 +69,10 @@ jobs:
           Write-Host "版本号:$tag"
           "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      # 核对产物 + 生成校验文件。
-      # 校验文件按 sha256sum 互认的格式写(哈希 + 两个空格 + 文件名),
-      # 并且必须是 UTF-8 无 BOM —— 带 BOM 的话 sha256sum -c 会报格式错。
-      - name: 核对产物并生成校验文件
+      # 核对产物存在,并把体积与哈希打进日志 —— 哈希只写日志、不发文件:
+      # Release 页面上 GitHub 自己会显示附件的 sha256,这里再打一份是为了在
+      #「构建产出」与「GitHub 记录」之间留个可对照的凭据。
+      - name: 核对发布产物
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -81,17 +81,9 @@ jobs:
           if (-not (Test-Path $exe)) { throw "找不到构建产物:$exe" }
 
           $file = Get-Item $exe
-          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
-          $line = "$hash  $($file.Name)"
-
-          [System.IO.File]::WriteAllText(
-            (Join-Path '${{ env.EXE_DIR }}' "$($file.Name).sha256"),
-            "$line`n",
-            (New-Object System.Text.UTF8Encoding($false)))
-
           Write-Host "附件  : $($file.Name)"
           Write-Host "体积  : $($file.Length) 字节"
-          Write-Host "校验  : $line"
+          Write-Host "SHA256: $((Get-FileHash $exe -Algorithm SHA256).Hash.ToLower())"
 
       - name: 写发布说明
         shell: pwsh
@@ -108,7 +100,7 @@ jobs:
             '',
             '**全部命令**:见仓库 README。',
             '',
-            '**校验**:`HotspotGo.exe.sha256` 里是附件的 SHA256,可用来确认下载完整、没被替换。',
+            '**校验**:附件的 SHA256 就在下方资产列表里,由 GitHub 自动计算,可直接复制 —— 不必再下一份校验文件。',
             '',
             '> 沙箱/杀软可能拦截,首次运行请允许。日志写在 exe 同目录的 `log.txt`。'
           ) -join "`n"
@@ -127,11 +119,8 @@ jobs:
           # (PowerShell 7.4+ 的默认行为;低版本上这行赋值无害)
           $PSNativeCommandUseErrorActionPreference = $false
 
-          # 附件:exe 与它的校验文件(为什么不用 zip 见文件头注释)
-          $assets = @(
-            (Join-Path '${{ env.EXE_DIR }}' 'HotspotGo.exe'),
-            (Join-Path '${{ env.EXE_DIR }}' 'HotspotGo.exe.sha256')
-          )
+          # 附件只有 exe(为什么不用 zip、不发校验文件,见文件头注释)
+          $assets = @(Join-Path '${{ env.EXE_DIR }}' 'HotspotGo.exe')
           foreach ($asset in $assets) {
             if (-not (Test-Path $asset)) { throw "找不到待发布的附件:$asset" }
           }
