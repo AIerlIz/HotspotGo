@@ -1,10 +1,15 @@
-# 发布:推一个 v* 的 tag 就自动构建 → 测试 → 冒烟 → 打包 → 创建 GitHub Release。
+# 发布:推一个 v* 的 tag 就自动构建 → 测试 → 冒烟 → 创建 GitHub Release。
 #
 # 为什么"部署"是发 Release:
 #   本工具是一个自带界面的 Windows 桌面 exe,没有服务端可以部署 ——
 #   它的分发方式就是"给一个能直接下载运行的 exe",所以发布产物即部署产物。
 #   如果你的目标其实是"把新版本推到某台固定机器上",那需要一台 self-hosted runner,
 #   可以再加一个 job,与本文件互不影响。
+#
+# 附件:HotspotGo.exe + HotspotGo.exe.sha256,不打包 zip。
+#   工具本身已经是单文件,再套一层压缩包只会让下载者多一步解压;
+#   直接放 exe,点一下就能存下来运行。
+#   校验文件是给下载者核对用的 —— 确认拿到的 exe 就是本流水线产出的那一个。
 
 name: Release
 
@@ -26,11 +31,10 @@ permissions:
 env:
   DOTNET_VERSION: '10.0.x'
   EXE_DIR: src/HotspotGo/bin/Release/net48
-  ZIP_NAME: HotspotGo-win-x64.zip
 
 jobs:
   release:
-    name: 构建 · 测试 · 打包 · 发布
+    name: 构建 · 测试 · 发布
     runs-on: windows-latest
 
     steps:
@@ -65,24 +69,29 @@ jobs:
           Write-Host "版本号:$tag"
           "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: 打包
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
+      # 核对产物 + 生成校验文件。
+      # 校验文件按 sha256sum 互认的格式写(哈希 + 两个空格 + 文件名),
+      # 并且必须是 UTF-8 无 BOM —— 带 BOM 的话 sha256sum -c 会报格式错。
+      - name: 核对产物并生成校验文件
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $stage = 'dist'
-          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          $exe = Join-Path '${{ env.EXE_DIR }}' 'HotspotGo.exe'
+          if (-not (Test-Path $exe)) { throw "找不到构建产物:$exe" }
 
-          Copy-Item (Join-Path '${{ env.EXE_DIR }}' 'HotspotGo.exe') $stage
-          Copy-Item 'README.md' $stage
-          # 故意不打 log.txt:那是运行时产物,不属于发布内容
+          $file = Get-Item $exe
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          $line = "$hash  $($file.Name)"
 
-          Compress-Archive -Path "$stage/*" -DestinationPath '${{ env.ZIP_NAME }}' -Force
+          [System.IO.File]::WriteAllText(
+            (Join-Path '${{ env.EXE_DIR }}' "$($file.Name).sha256"),
+            "$line`n",
+            (New-Object System.Text.UTF8Encoding($false)))
 
-          Get-ChildItem '${{ env.ZIP_NAME }}', (Join-Path $stage 'HotspotGo.exe') |
-            Select-Object Name, Length | Format-Table -AutoSize | Out-String | Write-Host
+          Write-Host "附件  : $($file.Name)"
+          Write-Host "体积  : $($file.Length) 字节"
+          Write-Host "校验  : $line"
 
       - name: 写发布说明
         shell: pwsh
@@ -98,6 +107,8 @@ jobs:
             '**运行要求**:Windows 10 / 11。系统自带 .NET Framework 4.8,无需另装运行时。',
             '',
             '**全部命令**:见仓库 README。',
+            '',
+            '**校验**:`HotspotGo.exe.sha256` 里是附件的 SHA256,可用来确认下载完整、没被替换。',
             '',
             '> 沙箱/杀软可能拦截,首次运行请允许。日志写在 exe 同目录的 `log.txt`。'
           ) -join "`n"
@@ -116,9 +127,10 @@ jobs:
           # (PowerShell 7.4+ 的默认行为;低版本上这行赋值无害)
           $PSNativeCommandUseErrorActionPreference = $false
 
+          # 附件:exe 与它的校验文件(为什么不用 zip 见文件头注释)
           $assets = @(
-            '${{ env.ZIP_NAME }}',
-            (Join-Path '${{ env.EXE_DIR }}' 'HotspotGo.exe')
+            (Join-Path '${{ env.EXE_DIR }}' 'HotspotGo.exe'),
+            (Join-Path '${{ env.EXE_DIR }}' 'HotspotGo.exe.sha256')
           )
           foreach ($asset in $assets) {
             if (-not (Test-Path $asset)) { throw "找不到待发布的附件:$asset" }
