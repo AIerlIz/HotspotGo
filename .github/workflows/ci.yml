@@ -1,0 +1,93 @@
+# 持续集成:每次推到 main / 每个 PR 都跑一遍构建 + 测试 + 冒烟,并留存可下载的 exe。
+#
+# 为什么整个 job 都跑在 windows-latest:
+#   本项目目标框架是 net48(理由见 src/HotspotGo/HotspotGo.csproj 的注释),
+#   net48 只能在 Windows 上构建和运行,换 Linux/macOS 跑不起来。
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - '.gitignore'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# 同一分支上旧的一轮还没跑完就来了新推送时,直接取消旧的,别排队堵着
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 与本地开发环境对齐的 SDK;显式安装是为了不依赖 runner 上预装了哪个版本
+  # (.slnx 解决方案格式需要 SDK 9.0.200+,固定大版本可避免踩到老 SDK)
+  DOTNET_VERSION: '10.0.x'
+  EXE_DIR: src/HotspotGo/bin/Release/net48
+
+jobs:
+  build-test-smoke:
+    name: 构建 · 测试 · 冒烟
+    runs-on: windows-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: 还原依赖
+        run: dotnet restore HotspotGo.slnx
+
+      - name: 构建(Release)
+        run: dotnet build HotspotGo.slnx -c Release --no-restore
+
+      # ==================================================================
+      # 测试
+      # ==================================================================
+      - name: 单元测试
+        run: >
+          dotnet test HotspotGo.slnx -c Release --no-build --no-restore
+          --logger "trx;LogFileName=test-results.trx"
+          --results-directory TestResults
+
+      # 单元测试只覆盖纯逻辑(参数解析 / 反射通道 / 结果对象 / 日志器 / 退出码契约),
+      # 真正调 WinRT 开热点那部分依赖系统状态,单测覆盖不了。
+      # 所以这里额外真跑一遍 exe:验证 net48 运行时能加载、WinRT 反射链路能通、
+      # 且没有任何未处理异常逃到顶层(逃出去的话退出码会是 1)。
+      # 脚本本身在 scripts/smoke-test.ps1,本地可用同样命令复现。
+      - name: 冒烟测试(真实运行 exe)
+        shell: pwsh
+        run: ./scripts/smoke-test.ps1 -ExeDir '${{ env.EXE_DIR }}'
+
+      # ==================================================================
+      # 留存产物
+      # ==================================================================
+      - name: 上传 exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: HotspotGo-${{ github.sha }}
+          path: ${{ env.EXE_DIR }}/HotspotGo.exe
+          if-no-files-found: error
+
+      # 冒烟挂掉时,log.txt 是唯一能看出卡在哪一步的线索,一并留下来
+      - name: 上传冒烟日志(仅失败时)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-log
+          path: ${{ env.EXE_DIR }}/log.txt
+          if-no-files-found: ignore
+
+      - name: 上传测试报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults/*.trx
+          if-no-files-found: ignore

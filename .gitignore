@@ -1,0 +1,22 @@
+# .NET 构建产物
+bin/
+obj/
+
+# 测试结果
+TestResults/
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+*.coveragexml
+
+# IDE
+.vs/
+.idea/
+*.user
+*.suo
+
+# 运行时产物(日志写在 exe 同目录)
+log.txt
+
+# 本机 AI 助手的工作状态(项目记忆等),不属于源码
+.workbuddy/

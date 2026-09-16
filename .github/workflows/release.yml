@@ -1,0 +1,138 @@
+# 发布:推一个 v* 的 tag 就自动构建 → 测试 → 冒烟 → 打包 → 创建 GitHub Release。
+#
+# 为什么"部署"是发 Release:
+#   本工具是一个自带界面的 Windows 桌面 exe,没有服务端可以部署 ——
+#   它的分发方式就是"给一个能直接下载运行的 exe",所以发布产物即部署产物。
+#   如果你的目标其实是"把新版本推到某台固定机器上",那需要一台 self-hosted runner,
+#   可以再加一个 job,与本文件互不影响。
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  # 手动补发:tag 已推上去但这条流水线失败了,可以在这里重跑,不必删 tag 重推
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的版本号(例如 v1.0.0)。同名 tag 不存在时,gh 会在当前分支上新建它。'
+        required: true
+        type: string
+
+# 创建 Release 需要写仓库内容的权限
+permissions:
+  contents: write
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  EXE_DIR: src/HotspotGo/bin/Release/net48
+  ZIP_NAME: HotspotGo-win-x64.zip
+
+jobs:
+  release:
+    name: 构建 · 测试 · 打包 · 发布
+    runs-on: windows-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: 还原依赖
+        run: dotnet restore HotspotGo.slnx
+
+      - name: 构建(Release)
+        run: dotnet build HotspotGo.slnx -c Release --no-restore
+
+      # 发布前必须过测试 —— 不能让没测过的构建流出去
+      - name: 单元测试
+        run: dotnet test HotspotGo.slnx -c Release --no-build --no-restore
+
+      - name: 冒烟测试(真实运行 exe)
+        shell: pwsh
+        run: ./scripts/smoke-test.ps1 -ExeDir '${{ env.EXE_DIR }}'
+
+      - name: 确定版本号
+        id: version
+        shell: pwsh
+        run: |
+          $tag = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.tag }}' } else { '${{ github.ref_name }}' }
+          if ([string]::IsNullOrWhiteSpace($tag)) { throw '拿不到版本号' }
+          Write-Host "版本号:$tag"
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: 打包
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $stage = 'dist'
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+
+          Copy-Item (Join-Path '${{ env.EXE_DIR }}' 'HotspotGo.exe') $stage
+          Copy-Item 'README.md' $stage
+          # 故意不打 log.txt:那是运行时产物,不属于发布内容
+
+          Compress-Archive -Path "$stage/*" -DestinationPath '${{ env.ZIP_NAME }}' -Force
+
+          Get-ChildItem '${{ env.ZIP_NAME }}', (Join-Path $stage 'HotspotGo.exe') |
+            Select-Object Name, Length | Format-Table -AutoSize | Out-String | Write-Host
+
+      - name: 写发布说明
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # 单引号数组拼接:避免 PowerShell here-string 的缩进约束,也让反引号保持字面量
+          $notes = @(
+            '一键打开 Windows 移动热点的单文件工具(命令行,无界面)。',
+            '',
+            '**怎么用**:下载下面的 `HotspotGo.exe`,放到任意目录双击即可 —— 不带参数就是"等电脑连上网后开启热点"。',
+            '',
+            '**运行要求**:Windows 10 / 11。系统自带 .NET Framework 4.8,无需另装运行时。',
+            '',
+            '**全部命令**:见仓库 README。',
+            '',
+            '> 沙箱/杀软可能拦截,首次运行请允许。日志写在 exe 同目录的 `log.txt`。'
+          ) -join "`n"
+
+          $notes | Set-Content -Path 'release-notes.md' -Encoding utf8
+          Write-Host $notes
+
+      - name: 发布 GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # 让 gh 的非零退出码走 $LASTEXITCODE 判断,而不是被当成终止性错误
+          # (PowerShell 7.4+ 的默认行为;低版本上这行赋值无害)
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          $assets = @(
+            '${{ env.ZIP_NAME }}',
+            (Join-Path '${{ env.EXE_DIR }}' 'HotspotGo.exe')
+          )
+          foreach ($asset in $assets) {
+            if (-not (Test-Path $asset)) { throw "找不到待发布的附件:$asset" }
+          }
+
+          # 同一个 tag 重跑时 Release 可能已存在,那就改为覆盖附件,而不是报错退出
+          gh release view $env:TAG 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $env:TAG 已存在,改为覆盖附件"
+            gh release upload $env:TAG @assets --clobber
+          } else {
+            gh release create $env:TAG --title "HotspotGo $env:TAG" --notes-file release-notes.md @assets
+          }
+
+          if ($LASTEXITCODE -ne 0) { throw "发布失败:gh 退出码 $LASTEXITCODE" }
+
+          Write-Host "已发布:$env:TAG"

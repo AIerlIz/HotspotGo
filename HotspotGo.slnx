@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/HotspotGo/HotspotGo.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/HotspotGo.Tests/HotspotGo.Tests.csproj" />
+  </Folder>
+</Solution>

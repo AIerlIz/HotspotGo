@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    单元测试。
+
+    目标框架必须与主项目一致(net48)—— 被测程序集是 net48,net5+ 的测试项目引用不了它。
+
+    测试范围刻意划在"不依赖热点的纯逻辑"上(参数解析 / 反射通道 / 结果对象 / 日志器 /
+    退出码契约),这些在任何 Windows 上都能稳定复现。
+    真正调 WinRT 开热点的那部分依赖系统状态(有没有网卡、icssvc 起没起),
+    不适合做单元测试,交由 CI 里的冒烟步骤跑一遍真实 exe 来兜。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <PlatformTarget>x64</PlatformTarget>
+    <RootNamespace>HotspotGo.Tests</RootNamespace>
+    <!-- net48 下 VSTest 需要 binding redirect,否则测试宿主会因依赖版本冲突加载失败 -->
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 与主项目同一份引用程序集包:让 CI 无 Visual Studio / 无 Win10 SDK 也能编译 net48 -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\HotspotGo\HotspotGo.csproj" />
+  </ItemGroup>
+
+</Project>
