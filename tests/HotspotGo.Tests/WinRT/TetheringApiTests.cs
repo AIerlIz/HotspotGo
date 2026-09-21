@@ -1,12 +1,12 @@
 using System;
+using HotspotGo.Core;
 using HotspotGo.WinRT;
 using Xunit;
 
 namespace HotspotGo.Tests.WinRT;
 
 /// <summary>
-/// 热点管理器反射封装里不依赖系统状态的纯逻辑:
-/// 类型限定名的拼法、空目标的兜底、开/关结果对象。
+/// 热点管理器反射封装里不依赖系统状态的纯逻辑:类型限定名的拼法、空目标的兜底。
 ///
 /// 真正调 WinRT 的那几条(创建管理器、读写状态、开/关)必须真机跑,
 /// 由 CI 的冒烟步骤覆盖。
@@ -39,11 +39,14 @@ public class TetheringApiTests
         Assert.StartsWith(TetheringApi.TypeFullName, TetheringApi.TypeName);
     }
 
-    /// <summary>"已开启"的判定值必须与 WinRT 枚举文本一致(TetheringOperationalState.On)。</summary>
+    /// <summary>
+    /// "已开启"的判定值必须与 WinRT 枚举文本一致(TetheringOperationalState.On)。
+    /// 常量归 Core(<see cref="HotspotState"/>),这里守的是跨层契约 —— 对不上就永远判定不了达标。
+    /// </summary>
     [Fact]
     public void State_on_matches_winrt_enum_text()
     {
-        Assert.Equal("On", TetheringApi.StateOn);
+        Assert.Equal("On", HotspotState.On);
     }
 
     // ===================================================================
@@ -65,55 +68,5 @@ public class TetheringApiTests
         Assert.Equal("(null)", TetheringApi.ReadSsid(null));
         Assert.Equal("(null)", TetheringApi.ReadClientCount(null));
         Assert.Equal("(null)", TetheringApi.ReadMaxClientCount(null));
-    }
-
-    // ===================================================================
-    // 开关结果对象
-    // ===================================================================
-
-    /// <summary>成功结果:状态达标、记下前后状态与耗时,没有错误信息。</summary>
-    [Fact]
-    public void ToggleResult_success_carries_state_transition()
-    {
-        var result = TetheringApi.ToggleResult.Success("Off", "On", TimeSpan.FromMilliseconds(1234));
-
-        Assert.True(result.Succeeded);
-        Assert.Equal("Off", result.StateBefore);
-        Assert.Equal("On", result.StateAfter);
-        Assert.Equal(TimeSpan.FromMilliseconds(1234), result.Elapsed);
-        Assert.Null(result.Error);
-    }
-
-    /// <summary>成功时的可读文本要带上状态迁移和耗时(写进 log.txt 的那一行)。</summary>
-    [Fact]
-    public void ToggleResult_success_describes_transition()
-    {
-        var describe = TetheringApi.ToggleResult.Success("Off", "On", TimeSpan.FromMilliseconds(1234)).Describe();
-
-        Assert.Contains("成功", describe);
-        Assert.Contains("Off → On", describe);
-        Assert.Contains("1234", describe);
-    }
-
-    /// <summary>失败结果:没有耗时,带着原因。</summary>
-    [Fact]
-    public void ToggleResult_failure_carries_reason()
-    {
-        var result = TetheringApi.ToggleResult.Failure("Off", "等待超时");
-
-        Assert.False(result.Succeeded);
-        Assert.Equal("Off", result.StateAfter);
-        Assert.Equal("等待超时", result.Error);
-        Assert.Null(result.Elapsed);
-    }
-
-    /// <summary>失败时的可读文本要带上原因。</summary>
-    [Fact]
-    public void ToggleResult_failure_describes_reason()
-    {
-        var describe = TetheringApi.ToggleResult.Failure("Off", "等待超时").Describe();
-
-        Assert.Contains("失败", describe);
-        Assert.Contains("等待超时", describe);
     }
 }

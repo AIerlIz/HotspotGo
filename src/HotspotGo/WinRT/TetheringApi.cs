@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Threading;
+using HotspotGo.Core;
 
 namespace HotspotGo.WinRT;
 
@@ -15,6 +16,9 @@ namespace HotspotGo.WinRT;
 ///
 /// 错误约定:类型不可用时抛异常,由调用方决定怎么记录;
 /// <see cref="CreateManager"/> 返回 null 属于业务语义 ——"该上游不能作为热点共享源"。
+///
+/// 结果对象与"已开启"的取值都由 Core 定义(<see cref="ToggleResult"/>、
+/// <see cref="HotspotState"/>)—— 本层只负责构造与比较,依赖方向朝内。
 /// </summary>
 internal static class TetheringApi
 {
@@ -25,9 +29,6 @@ internal static class TetheringApi
     /// <summary>热点管理器类型的限定名(可直接交给反射解析)。</summary>
     public const string TypeName =
         TypeFullName + ", Windows.Networking, ContentType=WindowsRuntime";
-
-    /// <summary>TetheringOperationalState 取值:已开启。</summary>
-    public const string StateOn = "On";
 
     /// <summary>轮询热点状态、确认开/关已生效的间隔。</summary>
     private static readonly TimeSpan StatePollInterval = TimeSpan.FromMilliseconds(500);
@@ -107,8 +108,8 @@ internal static class TetheringApi
         // 超时:再读最后一次,把看到的真实状态报出来
         state = ReadState(manager);
         return ToggleResult.Failure(state,
-            "等待 " + (int)timeout.TotalMilliseconds + " 毫秒后状态仍未达标(期望 " + (start ? StateOn : "非 " + StateOn) +
-            ",实际 " + state + ")");
+            "等待 " + (int)timeout.TotalMilliseconds + " 毫秒后状态仍未达标(期望 " +
+            (start ? HotspotState.On : "非 " + HotspotState.On) + ",实际 " + state + ")");
     }
 
     /// <summary>
@@ -116,36 +117,5 @@ internal static class TetheringApi
     /// (关闭时用"不再 On"而不是"等于 Off",避免 Unavailable 之类的中间态导致误判。)
     /// </summary>
     private static bool IsTargetReached(string state, bool start)
-        => start ? state == StateOn : state != StateOn;
-
-    /// <summary>一次开 / 关操作的结果。</summary>
-    internal sealed class ToggleResult
-    {
-        /// <summary>实际状态是否已达标。</summary>
-        public bool Succeeded { get; private set; }
-
-        /// <summary>操作前的状态。</summary>
-        public string StateBefore { get; private set; }
-
-        /// <summary>操作后(或超时时)读到的状态。</summary>
-        public string StateAfter { get; private set; }
-
-        /// <summary>失败原因;成功时为 null。</summary>
-        public string Error { get; private set; }
-
-        /// <summary>从发起到状态达标耗时;失败时为 null。</summary>
-        public TimeSpan? Elapsed { get; private set; }
-
-        public static ToggleResult Success(string before, string after, TimeSpan elapsed)
-            => new ToggleResult { Succeeded = true, StateBefore = before, StateAfter = after, Elapsed = elapsed };
-
-        public static ToggleResult Failure(string after, string error)
-            => new ToggleResult { Succeeded = false, StateBefore = null, StateAfter = after, Error = error };
-
-        /// <summary>一行可读文本,写进 log.txt。</summary>
-        public string Describe()
-            => Succeeded
-                ? "成功(状态 " + StateBefore + " → " + StateAfter + ",耗时 " + (int)Elapsed.Value.TotalMilliseconds + " 毫秒)"
-                : "失败: " + Error;
-    }
+        => start ? state == HotspotState.On : state != HotspotState.On;
 }

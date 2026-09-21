@@ -2,7 +2,6 @@ using System;
 using System.Diagnostics;
 using System.Threading;
 using HotspotGo.Logging;
-using HotspotGo.WinRT;
 
 namespace HotspotGo.Core;
 
@@ -11,14 +10,19 @@ namespace HotspotGo.Core;
 ///
 /// 热点的共享源必须是"已联网"的连接,所以开热点前要先等到它。
 /// 开 / 关两种命令共用同一套轮询逻辑,只是等待策略不同(见 <see cref="HotspotService"/>)。
+///
+/// 连接查询走 <see cref="IConnectivityApi"/>,本层不认识 WinRT ——
+/// 测试里换成假实现,就能复现"一直查不到 / 查一次抛异常 / 第三次才就绪"这些情况。
 /// </summary>
 internal sealed class UpstreamMonitor
 {
     private readonly ILogger _log;
+    private readonly IConnectivityApi _connectivity;
 
-    public UpstreamMonitor(ILogger log)
+    public UpstreamMonitor(ILogger log, IConnectivityApi connectivity)
     {
         _log = log;
+        _connectivity = connectivity;
     }
 
     /// <summary>
@@ -36,7 +40,7 @@ internal sealed class UpstreamMonitor
             var profile = TryQueryProfile();
             if (profile != null)
             {
-                _log.WriteLine("上游已就绪: " + ConnectivityApi.ReadProfileName(profile) +
+                _log.WriteLine("上游已就绪: " + _connectivity.ReadProfileName(profile) +
                     "(用时 " + (int)elapsed.Elapsed.TotalSeconds + " 秒)");
                 return profile;
             }
@@ -53,7 +57,7 @@ internal sealed class UpstreamMonitor
     {
         try
         {
-            return ConnectivityApi.GetInternetConnectionProfile();
+            return _connectivity.GetInternetConnectionProfile();
         }
         catch (Exception ex)
         {

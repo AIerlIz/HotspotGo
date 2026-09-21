@@ -1,7 +1,6 @@
 using System;
 using HotspotGo.Cli;
 using HotspotGo.Logging;
-using HotspotGo.WinRT;
 
 namespace HotspotGo.Core;
 
@@ -16,6 +15,10 @@ namespace HotspotGo.Core;
 ///     <item>否则调 Start/StopTetheringAsync,并确认状态已生效</item>
 ///   </list>
 /// 每一步的结果都落日志;每一步失败对应一个退出码(见 <see cref="ExitCode"/>)。
+///
+/// 本层不认识 WinRT:所有外部操作走 <see cref="IConnectivityApi"/> /
+/// <see cref="ITetheringApi"/>(接口就定义在 Core),由组装根(Program)注入真实实现、
+/// 测试注入假实现 —— 所以这里每个岔路口都能在单元测试里复现。
 /// </summary>
 internal sealed class HotspotService
 {
@@ -32,10 +35,15 @@ internal sealed class HotspotService
     private static readonly TimeSpan ToggleTimeout = TimeSpan.FromSeconds(30);
 
     private readonly ILogger _log;
+    private readonly IConnectivityApi _connectivity;
+    private readonly ITetheringApi _tethering;
 
-    public HotspotService(ILogger log)
+    /// <summary>依赖全部由组装根注入:生产路径见 <see cref="Program"/>,测试路径见 tests/Core。</summary>
+    public HotspotService(ILogger log, IConnectivityApi connectivity, ITetheringApi tethering)
     {
         _log = log;
+        _connectivity = connectivity;
+        _tethering = tethering;
     }
 
     /// <summary>执行一次完整流程,返回进程退出码。</summary>
@@ -52,8 +60,8 @@ internal sealed class HotspotService
             return ExitCode.NoUpstream;
         }
 
-        _log.WriteLine("  拿到 profile: " + ConnectivityApi.ReadProfileName(profile));
-        _log.WriteLine("  连接等级: " + ConnectivityApi.ReadConnectivityLevel(profile) +
+        _log.WriteLine("  拿到 profile: " + _connectivity.ReadProfileName(profile));
+        _log.WriteLine("  连接等级: " + _connectivity.ReadConnectivityLevel(profile) +
             "(不是 InternetAccess 时,连上热点的设备只能互访,出不了外网)");
 
         object manager = TryCreateManager(profile);
@@ -90,10 +98,10 @@ internal sealed class HotspotService
         if (options.UseAnyConnection && options.Command == HotspotCommand.TurnOn)
         {
             _log.WriteLine("--any 模式:不等外网,直接使用当前可用连接");
-            return ConnectivityApi.SelectShareableProfile();
+            return _connectivity.SelectShareableProfile();
         }
 
-        var monitor = new UpstreamMonitor(_log);
+        var monitor = new UpstreamMonitor(_log, _connectivity);
 
         if (options.Command == HotspotCommand.TurnOff)
         {
@@ -111,13 +119,13 @@ internal sealed class HotspotService
     {
         try
         {
-            if (WinrtReflection.FindType(TetheringApi.TypeName) == null)
+            if (!_tethering.IsManagerTypeAvailable())
             {
                 _log.WriteLine("[错误] 找不到 TetheringManager 类型");
                 return null;
             }
 
-            return TetheringApi.CreateManager(profile);
+            return _tethering.CreateManager(profile);
         }
         catch (Exception ex)
         {
@@ -129,11 +137,11 @@ internal sealed class HotspotService
     /// <summary>打印当前热点状态、SSID、客户端数,并返回状态文本供后续判断。</summary>
     private string ReportCurrentState(object manager)
     {
-        string state = TetheringApi.ReadState(manager);
+        string state = _tethering.ReadState(manager);
         _log.WriteLine("当前热点状态: " + state);
-        _log.WriteLine("  SSID: " + TetheringApi.ReadSsid(manager));
-        _log.WriteLine("  客户端数: " + TetheringApi.ReadClientCount(manager) +
-            " / " + TetheringApi.ReadMaxClientCount(manager));
+        _log.WriteLine("  SSID: " + _tethering.ReadSsid(manager));
+        _log.WriteLine("  客户端数: " + _tethering.ReadClientCount(manager) +
+            " / " + _tethering.ReadMaxClientCount(manager));
         return state;
     }
 
@@ -144,7 +152,7 @@ internal sealed class HotspotService
     /// <summary>关闭热点(本来就没开则直接返回)。关闭失败也返回 Ok,结果见日志。</summary>
     private ExitCode TurnOff(object manager, string currentState)
     {
-        if (currentState != TetheringApi.StateOn)
+        if (currentState != HotspotState.On)
         {
             _log.WriteLine("热点本来就没开,无需操作。");
             return ExitCode.Ok;
@@ -159,7 +167,7 @@ internal sealed class HotspotService
     /// <summary>开启热点(已经是开状态则直接返回);失败返回 <see cref="ExitCode.StartFailed"/>。</summary>
     private ExitCode TurnOn(object manager, string currentState)
     {
-        if (currentState == TetheringApi.StateOn)
+        if (currentState == HotspotState.On)
         {
             _log.WriteLine("[跳过] 热点已经是开启状态,无需操作。");
             return ExitCode.Ok;
@@ -172,7 +180,7 @@ internal sealed class HotspotService
         if (result.Succeeded)
         {
             _log.WriteLine("[成功] 热点已开启。状态=" + result.StateAfter +
-                " 客户端=" + TetheringApi.ReadClientCount(manager));
+                " 客户端=" + _tethering.ReadClientCount(manager));
             return ExitCode.Ok;
         }
 
@@ -181,16 +189,16 @@ internal sealed class HotspotService
     }
 
     /// <summary>开 / 关热点;异常折叠成一次失败结果,不把异常抛给主流程。</summary>
-    private TetheringApi.ToggleResult ToggleSafely(object manager, bool start)
+    private ToggleResult ToggleSafely(object manager, bool start)
     {
         try
         {
-            return TetheringApi.ToggleAndWait(manager, start, ToggleTimeout);
+            return _tethering.ToggleAndWait(manager, start, ToggleTimeout);
         }
         catch (Exception ex)
         {
             _log.WriteLine("[错误] 开/关热点异常: " + ex.Message);
-            return TetheringApi.ToggleResult.Failure(TetheringApi.ReadState(manager), ex.Message);
+            return ToggleResult.Failure(_tethering.ReadState(manager), ex.Message);
         }
     }
 }
