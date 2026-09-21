@@ -1,5 +1,4 @@
 using System;
-using HotspotGo;
 using Xunit;
 
 namespace HotspotGo.Tests;

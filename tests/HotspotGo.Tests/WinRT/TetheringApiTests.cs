@@ -1,4 +1,3 @@
-using System;
 using HotspotGo.Core;
 using HotspotGo.WinRT;
 using Xunit;

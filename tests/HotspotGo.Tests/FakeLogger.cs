@@ -13,9 +13,6 @@ internal sealed class FakeLogger : ILogger
 {
     private readonly List<string> _lines = new List<string>();
 
-    /// <summary>写过的日志行,按写入顺序。</summary>
-    public IReadOnlyList<string> Lines => _lines;
-
     /// <summary>整份日志拼成一段文本,断言关键词时用。</summary>
     public string Text => string.Join("\n", _lines);
 
