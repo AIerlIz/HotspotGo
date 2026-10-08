@@ -124,7 +124,9 @@ internal static class TetheringApi
         state = ReadState(manager);
         return ToggleResult.Failure(state,
             "等待 " + (int)timeout.TotalMilliseconds + " 毫秒后状态仍未达标(期望 " +
-            (start ? HotspotState.On : "一个确定的、非 " + HotspotState.On + " 的状态") +
+            (start
+                ? HotspotState.On
+                : "一个确定的、非 " + HotspotState.On + " 的状态(排除 " + HotspotState.InTransition + ")") +
             ",实际 " + state + ")");
     }
 }
