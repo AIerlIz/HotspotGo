@@ -31,6 +31,13 @@
       分不清"代码坏了"还是"这台机器开不了",不适合当门槛。
       想手动验一次就:  pwsh scripts/smoke-test.ps1 -Toggle
 
+    ★ 关于控制台窗口:
+      脚本用 Start-Process 启动 exe,Windows 会给它新建一个控制台 —— exe 自己会把这个
+      "没人看"的窗口藏掉(见 src/HotspotGo/Cli/Terminal.cs),所以这里不会弹窗,
+      日志照旧落在 log.txt,判定结果就记在本次日志的第二行。
+      也可以给 Start-Process 加 -NoNewWindow 让它继承本脚本的控制台,那样 exe 的日志会
+      直接打进终端;但 CI 里就多一份重复输出,所以没加 —— 这里是要验 exe,不是要它的输出。
+
     用法:pwsh scripts/smoke-test.ps1 [-ExeDir <构建输出目录>] [-Toggle]
 #>
 param(
