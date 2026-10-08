@@ -9,8 +9,11 @@
       因此**不需要随程序分发 Microsoft.Windows.SDK.NET.dll**(约 24 MB)。
       .NET 5+ 没有这个能力,必须带那个投影程序集。
 
-      收益:产物约 20 KB(Release 实测 20480 字节),且 Win10/11 自带 .NET Framework 4.8,
-      目标机零安装。
+      收益:产物约 35 KB(Release 实测 35840 字节,其中图标约 15 KB),且 Win10/11 自带
+      .NET Framework 4.8,目标机零安装。
+      (加图标前是 20480 字节。图标只放 16/32/48/256 四个尺寸就是为了这个:
+       ICO 里的 64 / 128 是未压缩位图,光 128 一张就 65 KB —— 体积是这个项目的一个卖点,
+       不该为了图标把它翻几倍。要改图标见 scripts/make-icon.py。)
 
     ★ 输出路径用 SDK 默认的 bin\Release\net48\(与目标框架一致,不再有历史遗留目录名)。
       计划任务要指向本 exe 时,以这里的实际输出路径为准。
@@ -21,7 +24,25 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>HotspotGo</AssemblyName>
     <RootNamespace>HotspotGo</RootNamespace>
+
+    <!-- 固定 x64:热点 API 在 32 位下也能用,但本项目只按 64 位 Windows 验证与发布,
+         固定下来可以避开 AnyCPU 那套(64 位系统上的 WinExe 默认 Prefer32Bit,
+         同一个 exe 在不同机器上会跑成两种进程形态),少一个变量。 -->
     <PlatformTarget>x64</PlatformTarget>
+
+    <!-- 图标:由 scripts/make-icon.py 生成(改配色 / 换形状就去改那个脚本重跑,
+         别直接编辑 .ico —— 二进制文件没有来源就没人敢动它) -->
+    <ApplicationIcon>Assets\HotspotGo.ico</ApplicationIcon>
+
+    <!-- 文件属性里显示的东西。用户排查问题时第一眼就是右键→属性→详细信息 -->
+    <AssemblyTitle>热点快启 HotspotGo</AssemblyTitle>
+    <Product>热点快启 HotspotGo</Product>
+    <Description>一键打开 Windows 移动热点(命令行,无内置界面)。</Description>
+
+    <!-- 版本号刻意不写死在这里:release.yml 会按 tag 注入
+         (-p:Version=1.2.3),这样 exe 的文件版本与发布的 tag 一致 ——
+         否则每一个 Release 的 exe 都写着 1.0.0,用户没法判断自己下的是哪一版。
+         这里不填 = 本地构建用 SDK 默认的 1.0.0;发布流水线里有一道核对,版本对不上会直接失败。 -->
     <!-- 不生成 .exe.config:net48 默认会写一份 supportedRuntime 声明,
          而 v4.0 是本机唯一可用的 CLR,这份声明没有任何作用 -->
     <GenerateSupportedRuntime>false</GenerateSupportedRuntime>

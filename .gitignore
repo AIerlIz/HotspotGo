@@ -18,5 +18,9 @@ TestResults/
 # 运行时产物(日志写在 exe 同目录)
 log.txt
 
+# 资源生成脚本(scripts/make-icon.py)跑一次就会留下字节码缓存
+__pycache__/
+*.pyc
+
 # 本机 AI 助手的工作状态(项目记忆等),不属于源码
 .workbuddy/

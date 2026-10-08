@@ -10,6 +10,9 @@
 #   工具本身已经是单文件,再套一层压缩包只会让下载者多一步解压;
 #   校验更不用自己发 —— GitHub 会给每个附件自动算出 sha256 并显示在 Release 页面上
 #   (资产列表右侧就是,还带一键复制),再发一个 .sha256 文件纯属重复。
+#
+# tag 会被注入进 exe 的版本信息(-p:Version),所以用户右键看文件属性就能对上版本号;
+# 发布前有一道核对,版本没注入进去会直接失败。
 
 name: Release
 
@@ -49,8 +52,31 @@ jobs:
       - name: 还原依赖
         run: dotnet restore HotspotGo.slnx
 
+      # 版本号必须在构建之前定下来 —— 它要作为 -p:Version 注入进二进制。
+      - name: 确定版本号
+        id: version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $tag = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.tag }}' } else { '${{ github.ref_name }}' }
+          if ([string]::IsNullOrWhiteSpace($tag)) { throw '拿不到版本号' }
+
+          # tag 上的 v 前缀不进版本号:v1.2.3 → 1.2.3
+          $version = $tag -replace '^[vV]', ''
+          if ($version -notmatch '^\d+(\.\d+)*') {
+            throw "tag 不像版本号:$tag(期望 v1.2.3 这类;程序集版本号必须是数字开头)"
+          }
+
+          Write-Host "tag    :$tag"
+          Write-Host "版本号 :$version"
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      # 把 tag 当版本号注入二进制 —— 否则每个 Release 的 exe 文件属性都写着 1.0.0,
+      # 用户没法判断自己下的是哪一版(见 src/HotspotGo/HotspotGo.csproj 里那段说明)。
       - name: 构建(Release)
-        run: dotnet build HotspotGo.slnx -c Release --no-restore
+        run: dotnet build HotspotGo.slnx -c Release --no-restore -p:Version=${{ steps.version.outputs.version }}
 
       # 发布前必须过测试 —— 不能让没测过的构建流出去
       - name: 单元测试
@@ -60,18 +86,9 @@ jobs:
         shell: pwsh
         run: ./scripts/smoke-test.ps1 -ExeDir '${{ env.EXE_DIR }}'
 
-      - name: 确定版本号
-        id: version
-        shell: pwsh
-        run: |
-          $tag = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.tag }}' } else { '${{ github.ref_name }}' }
-          if ([string]::IsNullOrWhiteSpace($tag)) { throw '拿不到版本号' }
-          Write-Host "版本号:$tag"
-          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-
-      # 核对产物存在,并把体积与哈希打进日志 —— 哈希只写日志、不发文件:
-      # Release 页面上 GitHub 自己会显示附件的 sha256,这里再打一份是为了在
-      #「构建产出」与「GitHub 记录」之间留个可对照的凭据。
+      # 核对产物存在、版本号真的进了二进制,并把体积与哈希打进日志 ——
+      # 哈希只写日志、不发文件:Release 页面上 GitHub 自己会显示附件的 sha256,
+      # 这里再打一份是为了在「构建产出」与「GitHub 记录」之间留个可对照的凭据。
       - name: 核对发布产物
         shell: pwsh
         run: |
@@ -85,6 +102,17 @@ jobs:
           Write-Host "体积  : $($file.Length) 字节"
           Write-Host "SHA256: $((Get-FileHash $exe -Algorithm SHA256).Hash.ToLower())"
 
+          # 读 exe 自己的文件版本 —— 流水线里有个 tag 变量不代表它进了二进制,
+          # 这一步就是防"发出去一个标着 1.0.0 的 v9.9.9"。
+          # 预发布版(1.2.3-beta)的 FileVersion 只有数字部分,所以比数字前缀。
+          $expected = '${{ steps.version.outputs.version }}'
+          $numeric = ($expected -split '-')[0]
+          $actual = $file.VersionInfo.FileVersion
+          if (-not $actual.StartsWith("$numeric.")) {
+            throw "产物版本号不对:期望 $numeric.x,实际 $actual(检查构建那步的 -p:Version)"
+          }
+          Write-Host "版本  : $actual"
+
       - name: 写发布说明
         shell: pwsh
         run: |
@@ -96,7 +124,7 @@ jobs:
             '',
             '**怎么用**:下载下面的 `HotspotGo.exe`,放到任意目录双击即可 —— 不带参数就是"等电脑连上网后开启热点"。',
             '',
-            '**运行要求**:Windows 10 / 11。系统自带 .NET Framework 4.8,无需另装运行时。',
+            '**运行要求**:64 位 Windows 10 / 11。系统自带 .NET Framework 4.8,无需另装运行时。',
             '',
             '**全部命令**:见仓库 README。',
             '',
