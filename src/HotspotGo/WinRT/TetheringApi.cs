@@ -14,11 +14,12 @@ namespace HotspotGo.WinRT;
 ///   <c>"类型全名, WinRT 程序集名, ContentType=WindowsRuntime"</c>
 ///   就能从操作系统解析出类型。本类型隶属 WinRT 程序集 <c>Windows.Networking</c>。
 ///
-/// 错误约定:类型不可用时抛异常,由调用方决定怎么记录;
+/// 错误约定:类型 / 成员不可用时抛异常,由调用方决定怎么记录;
 /// <see cref="CreateManager"/> 返回 null 属于业务语义 ——"该上游不能作为热点共享源"。
 ///
-/// 结果对象与"已开启"的取值都由 Core 定义(<see cref="ToggleResult"/>、
-/// <see cref="HotspotState"/>)—— 本层只负责构造与比较,依赖方向朝内。
+/// 结果对象、"已开启"的取值、以及"算不算达标"的判定都由 Core 定义
+/// (<see cref="ToggleResult"/>、<see cref="HotspotState"/>)—— 本层只负责调用与比较,
+/// 依赖方向朝内。
 /// </summary>
 internal static class TetheringApi
 {
@@ -65,7 +66,8 @@ internal static class TetheringApi
         => WinrtReflection.GetPropertyString(manager, "MaxClientCount");
 
     /// <summary>
-    /// 开 / 关热点,并<b>等到实际状态变成目标值</b>才返回。
+    /// 开 / 关热点,并<b>等到实际状态达到目标</b>才返回(达标判定见
+    /// <see cref="HotspotState.IsTargetReached"/>)。
     ///
     /// 为什么不解释 Start/StopTetheringAsync 的返回值:
     ///   .NET Framework 上用反射调用返回 WinRT 异步方法时,拿到的是裸
@@ -76,6 +78,11 @@ internal static class TetheringApi
     ///
     ///   所以这里改为"发起调用 → 轮询 TetheringOperationalState 直到达标"。
     ///   对"热点到底开没开成"这个问题,读实际状态比读操作返回值更直接、更可靠。
+    ///
+    /// 这一处刻意用会抛异常的 <see cref="WinrtReflection.InvokeInstance"/> 而不是
+    /// 吞异常的 <see cref="WinrtReflection.SafeInvoke"/>:WinRT 拒绝开热点时
+    /// (驱动不支持、icssvc 没起、共享源不合适)原因就在那条异常里,
+    /// 而 log.txt 是唯一的排障入口 —— 报"返回 null"等于把唯一的线索丢掉。
     /// </summary>
     /// <param name="manager">热点管理器。</param>
     /// <param name="start">true = 开启;false = 关闭。</param>
@@ -83,15 +90,23 @@ internal static class TetheringApi
     public static ToggleResult ToggleAndWait(object manager, bool start, TimeSpan timeout)
     {
         string stateBefore = ReadState(manager);
+        string operation = start ? "StartTetheringAsync" : "StopTetheringAsync";
 
         // 异步操作对象要一直持有到轮询结束:丢掉引用虽然不会取消 WinRT 侧的
         // 操作,但持有它更稳妥。
-        object asyncOperation = WinrtReflection.SafeInvoke(
-            manager, start ? "StartTetheringAsync" : "StopTetheringAsync");
+        object asyncOperation;
+        try
+        {
+            asyncOperation = WinrtReflection.InvokeInstance(manager, operation);
+        }
+        catch (Exception ex)
+        {
+            return ToggleResult.Failure(stateBefore,
+                "调用 " + operation + " 异常: " + ex.GetType().Name + ": " + ex.Message);
+        }
 
         if (asyncOperation == null)
-            return ToggleResult.Failure(stateBefore,
-                "调用 " + (start ? "StartTetheringAsync" : "StopTetheringAsync") + " 失败(返回 null)");
+            return ToggleResult.Failure(stateBefore, "调用 " + operation + " 返回了 null(操作没发出去)");
 
         var stopwatch = Stopwatch.StartNew();
         string state = stateBefore;
@@ -99,7 +114,7 @@ internal static class TetheringApi
         while (stopwatch.Elapsed < timeout)
         {
             state = ReadState(manager);
-            if (IsTargetReached(state, start))
+            if (HotspotState.IsTargetReached(state, start))
                 return ToggleResult.Success(stateBefore, state, stopwatch.Elapsed);
 
             Thread.Sleep(StatePollInterval);
@@ -109,13 +124,7 @@ internal static class TetheringApi
         state = ReadState(manager);
         return ToggleResult.Failure(state,
             "等待 " + (int)timeout.TotalMilliseconds + " 毫秒后状态仍未达标(期望 " +
-            (start ? HotspotState.On : "非 " + HotspotState.On) + ",实际 " + state + ")");
+            (start ? HotspotState.On : "一个确定的、非 " + HotspotState.On + " 的状态") +
+            ",实际 " + state + ")");
     }
-
-    /// <summary>
-    /// 判断是否已达到目标:开 → 状态为 On;关 → 状态不再是 On。
-    /// (关闭时用"不再 On"而不是"等于 Off",避免 Unavailable 之类的中间态导致误判。)
-    /// </summary>
-    private static bool IsTargetReached(string state, bool start)
-        => start ? state == HotspotState.On : state != HotspotState.On;
 }

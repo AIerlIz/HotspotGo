@@ -17,4 +17,10 @@ internal enum ExitCode
 
     /// <summary>开启热点失败。</summary>
     StartFailed = 4,
+
+    /// <summary>
+    /// 命令行参数无法识别 —— 为避免手误把命令执行反了(把 <c>--off</c> 敲成 <c>--pff</c>
+    /// 会落到"开热点"这个默认动作上),这种情况一律不做任何操作。
+    /// </summary>
+    BadArguments = 5,
 }

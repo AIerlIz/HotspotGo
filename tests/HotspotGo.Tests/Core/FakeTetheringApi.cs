@@ -6,6 +6,9 @@ namespace HotspotGo.Tests.Core;
 /// <summary>
 /// 假的热点管理器操作:状态存在一个字段里,开 / 关时就地改写,
 /// 于是"开完之后状态到底变没变、退出码对不对"都能直接断言。
+///
+/// 也可以在读某个值时抛异常(<see cref="StateError"/> / <see cref="SsidError"/>)——
+/// 用来验证"读不到值"这条路上主流程不会翻成 FATAL,而是照常走完并如实记日志。
 /// </summary>
 internal sealed class FakeTetheringApi : ITetheringApi
 {
@@ -21,8 +24,14 @@ internal sealed class FakeTetheringApi : ITetheringApi
     /// <summary>当前热点状态(ReadState 的返回值)。</summary>
     public string State { get; set; } = "Off";
 
+    /// <summary>读状态时抛出的异常;null = 不抛。用来模拟管理器对象失效。</summary>
+    public Exception StateError { get; set; }
+
     /// <summary>SSID 与客户端数。</summary>
     public string Ssid { get; set; } = "MY-SSID";
+
+    /// <summary>读 SSID 时抛出的异常;null = 不抛。</summary>
+    public Exception SsidError { get; set; }
 
     public string ClientCount { get; set; } = "0";
 
@@ -69,9 +78,17 @@ internal sealed class FakeTetheringApi : ITetheringApi
         return Manager;
     }
 
-    public string ReadState(object manager) => State;
+    public string ReadState(object manager)
+    {
+        if (StateError != null) throw StateError;
+        return State;
+    }
 
-    public string ReadSsid(object manager) => Ssid;
+    public string ReadSsid(object manager)
+    {
+        if (SsidError != null) throw SsidError;
+        return Ssid;
+    }
 
     public string ReadClientCount(object manager) => ClientCount;
 

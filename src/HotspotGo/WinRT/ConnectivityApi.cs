@@ -1,14 +1,20 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using HotspotGo.Core;
 
 namespace HotspotGo.WinRT;
 
 /// <summary>
 /// <c>Windows.Networking.Connectivity.NetworkInformation</c> 的反射封装 ——
-/// 回答"系统当前能用哪条连接"。
+/// 回答"系统当前有哪些连接、这条连接什么等级"。
 ///
-/// 工具本身不依赖连接叫什么名字:问系统要一条连接配置,再把它作为热点的共享源。
+/// 本层<b>只提供事实,不做选择</b>:"优先能上外网的、没有就退而取任意已连接的"
+/// 是业务策略,归 Core(见 <c>HotspotService</c> 里挑选共享源那一段)。
+/// 这里曾经有个 <c>SelectShareableProfile()</c> 把策略一起包了,结果是
+/// "热点挂到哪条连接上"这个决定成了唯一测不到的业务判断。
+///
+/// 工具本身不依赖连接叫什么名字:问系统要连接配置,再把它作为热点的共享源。
 /// PPPoE 改名、或上游换成 Wi-Fi / 以太网,这里都不用改。
 /// </summary>
 internal static class ConnectivityApi
@@ -20,12 +26,6 @@ internal static class ConnectivityApi
     /// <summary>Internet 连接信息类型的限定名(可直接交给反射解析)。</summary>
     public const string TypeName =
         TypeFullName + ", Windows.Networking, ContentType=WindowsRuntime";
-
-    /// <summary>连接等级:完全未连接,不能作为共享源。</summary>
-    private const string LevelNone = "None";
-
-    /// <summary>连接等级:能出外网。</summary>
-    private const string LevelInternet = "InternetAccess";
 
     /// <summary>
     /// 取当前 Internet 连接配置(ConnectionProfile)。
@@ -40,23 +40,24 @@ internal static class ConnectivityApi
     }
 
     /// <summary>
-    /// 在系统所有连接里挑一条可用于开热点的:<b>优先能上外网的</b>,没有就退而求其次取
-    /// 任意一条已连接的(有本地链路即可,例如网线接了但路由器没通)。
-    /// 全都没有(所有网卡都断开)时返回 null —— 此时热点 API 无从挂载,开不了。
+    /// 取系统里全部连接配置(含未连接的 —— 筛不筛是调用方的事)。
+    ///
+    /// 类型解析失败 / 返回值不可枚举这两类问题在这里<b>立刻抛出</b>(不是等迭代时才抛),
+    /// 由 Core 兜住并翻成"没有可用连接"的退出码 —— 那里才决定"抛异常意味着什么"。
+    ///
+    /// WinRT 的 <c>IVectorView</c> 在这里已被 CLR 投影成实现了 <see cref="IEnumerable"/>
+    /// 的托管集合,因此可以直接遍历。
     /// </summary>
-    public static object SelectShareableProfile()
+    public static IEnumerable<object> GetAllProfiles()
     {
-        object fallback = null;
+        var type = WinrtReflection.FindType(TypeName);
+        if (type == null) throw new TypeLoadException("找不到 WinRT 类型: " + TypeFullName);
 
-        foreach (var profile in GetAllConnectionProfiles())
-        {
-            if (!IsConnected(profile)) continue;
+        object profiles = WinrtReflection.InvokeStatic(type, "GetConnectionProfiles");
 
-            if (IsInternetAccess(profile)) return profile;
-            if (fallback == null) fallback = profile;
-        }
+        if (profiles is IEnumerable enumerable) return Enumerate(enumerable);
 
-        return fallback;
+        throw new InvalidOperationException("GetConnectionProfiles 返回的对象不可枚举");
     }
 
     /// <summary>读连接配置名(如 PPPoE);读不到返回 "(null)"。</summary>
@@ -67,38 +68,20 @@ internal static class ConnectivityApi
     public static string ReadConnectivityLevel(object profile)
         => DescribeLevel(profile);
 
-    /// <summary>
-    /// 取系统里全部连接配置。WinRT 的 <c>IVectorView</c> 在这里已被 CLR 投影成
-    /// 实现了 <see cref="IEnumerable"/> 的托管集合,因此可以直接遍历。
-    /// </summary>
-    private static IEnumerable<object> GetAllConnectionProfiles()
-    {
-        var type = WinrtReflection.FindType(TypeName);
-        if (type == null) throw new TypeLoadException("找不到 WinRT 类型: " + TypeFullName);
-
-        object profiles = WinrtReflection.InvokeStatic(type, "GetConnectionProfiles");
-
-        if (profiles is IEnumerable enumerable)
-        {
-            foreach (var profile in enumerable) yield return profile;
-            yield break;
-        }
-
-        throw new InvalidOperationException("GetConnectionProfiles 返回的对象不可枚举");
-    }
-
-    /// <summary>连接等级不是 None 就算已连接(有本地链路即可,不需要能出外网)。</summary>
-    private static bool IsConnected(object profile)
-        => DescribeLevel(profile) != LevelNone;
-
-    /// <summary>是否真的能出外网。</summary>
-    private static bool IsInternetAccess(object profile)
-        => DescribeLevel(profile) == LevelInternet;
-
     /// <summary>把 GetNetworkConnectivityLevel 的枚举值读成文本。</summary>
     private static string DescribeLevel(object profile)
     {
         var level = WinrtReflection.SafeInvoke(profile, "GetNetworkConnectivityLevel");
-        return level == null ? "(null)" : level.ToString();
+        return level == null ? UnknownValue.Placeholder : level.ToString();
+    }
+
+    /// <summary>
+    /// 把投影出来的集合收成 <see cref="IEnumerable{T}"/>。
+    /// 单独拆一个方法是为了让上面的类型检查与"不可枚举"判断立即执行 ——
+    /// 迭代器方法体里的异常要等到开始遍历才抛,那样错误会在 Core 的循环里才冒出来。
+    /// </summary>
+    private static IEnumerable<object> Enumerate(IEnumerable source)
+    {
+        foreach (var item in source) yield return item;
     }
 }

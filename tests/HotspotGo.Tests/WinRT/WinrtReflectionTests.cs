@@ -1,4 +1,5 @@
 using System;
+using HotspotGo.Core;
 using HotspotGo.WinRT;
 using Xunit;
 
@@ -158,5 +159,16 @@ public class WinrtReflectionTests
     public void GetPropertyString_returns_placeholder_when_target_is_null()
     {
         Assert.Equal("(null)", WinrtReflection.GetPropertyString(null, "TetheringOperationalState"));
+    }
+
+    /// <summary>
+    /// 这个 "(null)" 不是随便一个字符串:Core 拿它判断"读失败"
+    /// (见 <see cref="HotspotState.IsTargetReached"/>、<c>HotspotService.IsShareable</c>)。
+    /// 本层不认识 Core 的类型(那是更底层的通用工具),所以两边的字面量在这里对齐。
+    /// </summary>
+    [Fact]
+    public void Placeholder_matches_the_core_contract()
+    {
+        Assert.Equal(UnknownValue.Placeholder, WinrtReflection.GetPropertyString(null, "任何属性"));
     }
 }

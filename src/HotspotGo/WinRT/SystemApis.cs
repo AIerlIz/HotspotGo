@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using HotspotGo.Core;
 
 namespace HotspotGo.WinRT;
@@ -13,7 +14,7 @@ internal sealed class SystemConnectivityApi : IConnectivityApi
 {
     public object GetInternetConnectionProfile() => ConnectivityApi.GetInternetConnectionProfile();
 
-    public object SelectShareableProfile() => ConnectivityApi.SelectShareableProfile();
+    public IEnumerable<object> GetAllProfiles() => ConnectivityApi.GetAllProfiles();
 
     public string ReadProfileName(object profile) => ConnectivityApi.ReadProfileName(profile);
 

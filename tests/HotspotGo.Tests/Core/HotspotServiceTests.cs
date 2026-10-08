@@ -12,6 +12,10 @@ namespace HotspotGo.Tests.Core;
 /// 这是本工具真正的核心逻辑:等上游 → 建管理器 → 读状态 → 开 / 关;
 /// 每个岔路口都对应一个退出码,计划任务和脚本据此判断成败,所以逐条钉死。
 /// 所有 WinRT 操作由 Fake* 提供,不依赖跑测试的机器有没有网卡、热点开着没。
+///
+/// 其中两组是"策略住在 Core"换来的:--any 的挑选规则(优先外网 / 退而取本地 /
+/// 跳过不可用 / 单条查不通不影响整轮)和关热点的状态判定 ——
+/// 它们以前在 WinRT 层,测不到。
 /// </summary>
 public class HotspotServiceTests
 {
@@ -76,6 +80,8 @@ public class HotspotServiceTests
 
         Assert.Equal(ExitCode.StartFailed, code);
         Assert.Contains("模拟开热点异常", _log.Text);
+        // 异常类型名也要留下:只记 Message 时,不同故障看起来会一模一样
+        Assert.Contains("InvalidOperationException", _log.Text);
     }
 
     // ===================================================================
@@ -123,6 +129,23 @@ public class HotspotServiceTests
         Assert.Contains("关不掉", _log.Text);
     }
 
+    /// <summary>
+    /// 状态读不到时不当作"已经是关的"就完事,而是如实说明:读不到 ≠ 关成功。
+    /// 无论哪种,都不该去调 StopTetheringAsync(没有依据就动手,比不动手更糟)。
+    /// </summary>
+    [Fact]
+    public void TurnOff_treats_unreadable_state_as_not_open()
+    {
+        _tethering.StateError = new InvalidOperationException("模拟读状态失败");
+
+        var code = Service().Run(Options.Parse(new[] { "--off" }));
+
+        Assert.Equal(ExitCode.Ok, code);
+        Assert.Equal(0, _tethering.ToggleCallCount);
+        Assert.Contains("读不到热点状态", _log.Text);
+        Assert.Contains("模拟读状态失败", _log.Text);
+    }
+
     // ===================================================================
     // 只读状态
     // ===================================================================
@@ -156,35 +179,145 @@ public class HotspotServiceTests
         Assert.Contains("2 / 8", _log.Text);
     }
 
+    /// <summary>某个值读不出来(抛异常)时,--status 仍要走完并如实记录,不能掀翻成 FATAL。</summary>
+    [Fact]
+    public void Status_survives_a_failing_read()
+    {
+        _tethering.SsidError = new InvalidOperationException("模拟读 SSID 失败");
+
+        var code = Service().Run(Options.Parse(new[] { "--status" }));
+
+        Assert.Equal(ExitCode.Ok, code);
+        Assert.Contains("模拟读 SSID 失败", _log.Text);
+        Assert.Contains("当前热点状态", _log.Text);
+    }
+
+    /// <summary>
+    /// --status 拿连接配置只等自己的短上限,不套用常规模式的 90 秒 ——
+    /// 只读命令让人干等一分半是不可接受的。
+    ///
+    /// 能锁的和不能锁的要分清(同 <see cref="TurnOff_gives_up_quickly_when_no_upstream"/>):
+    ///   - 能锁:总耗时远小于 90 秒;且确实重试了(不是查一次就放弃);
+    ///   - 不能锁:轮询间隔本身,间隔靠人工审阅。
+    /// </summary>
+    [Fact]
+    public void Status_does_not_wait_for_the_full_upstream_timeout()
+    {
+        _connectivity.DefaultProfile = null;
+        var stopwatch = Stopwatch.StartNew();
+
+        var code = Service().Run(Options.Parse(new[] { "--status" }));
+
+        stopwatch.Stop();
+        Assert.Equal(ExitCode.NoUpstream, code);
+        Assert.Contains("--status 模式下也拿不到", _log.Text);
+        Assert.True(_connectivity.QueryCount >= 2,
+            "应反复重试,而不是只查一次;实际 " + _connectivity.QueryCount);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(4.5),
+            "应 3 秒左右就放弃,而不是套用常规模式的 90 秒;实际 " + stopwatch.Elapsed);
+    }
+
     // ===================================================================
-    // --any:不等外网
+    // --any:不等外网,挑选共享源(策略在 Core,这里逐条钉死)
     // ===================================================================
 
-    /// <summary>--any 直接从全部连接里挑一条,完全不走"等 Internet 连接"的轮询。</summary>
+    /// <summary>--any 从全部连接里挑一条,完全不走"等 Internet 连接"的轮询。</summary>
     [Fact]
-    public void Any_picks_shareable_profile_without_waiting()
+    public void Any_picks_a_profile_without_waiting_for_internet()
     {
-        _connectivity.DefaultProfile = null;            // 没有 Internet 连接
-        _connectivity.ShareableProfile = new object();  // 但有已连接的网卡
+        _connectivity.DefaultProfile = null;                    // 没有 Internet 连接
+        var profile = _connectivity.AddProfile(ConnectivityLevel.InternetAccess, "本地网卡");
 
         var code = Service().Run(Options.Parse(new[] { "--any" }));
 
         Assert.Equal(ExitCode.Ok, code);
-        Assert.Equal(1, _connectivity.SelectCount);
+        Assert.Equal(1, _connectivity.EnumerationCount);
         Assert.Equal(0, _connectivity.QueryCount);
-        Assert.Same(_connectivity.ShareableProfile, _connectivity.LastNamedProfile);
+        Assert.Same(profile, _connectivity.LastNamedProfile);
     }
 
-    /// <summary>--any 但一个已连接的网卡都没有 → 退出码 2,提示先接网线 / 连 Wi-Fi。</summary>
+    /// <summary>能上外网的优先,哪怕它排在后面。</summary>
     [Fact]
-    public void Any_without_any_connection_returns_NoUpstream()
+    public void Any_prefers_the_internet_access_profile()
     {
-        _connectivity.ShareableProfile = null;
+        _connectivity.AddProfile(ConnectivityLevel.LocalAccess, "只能本地");
+        var internet = _connectivity.AddProfile(ConnectivityLevel.InternetAccess, "能上外网");
+
+        var code = Service().Run(Options.Parse(new[] { "--any" }));
+
+        Assert.Equal(ExitCode.Ok, code);
+        Assert.Same(internet, _connectivity.LastNamedProfile);
+        Assert.Same(internet, _tethering.LastCreatedProfile);
+    }
+
+    /// <summary>一条能上外网的都没有时,退而用"已连接但只能本地通"的那条(电脑没网时也能开热点)。</summary>
+    [Fact]
+    public void Any_falls_back_to_a_merely_connected_profile()
+    {
+        var local = _connectivity.AddProfile(ConnectivityLevel.LocalAccess, "只能本地");
+
+        var code = Service().Run(Options.Parse(new[] { "--any" }));
+
+        Assert.Equal(ExitCode.Ok, code);
+        Assert.Same(local, _connectivity.LastNamedProfile);
+    }
+
+    /// <summary>完全断开(None)和读不出等级的连接都不能拿来当共享源,要跳过并说明理由。</summary>
+    [Theory]
+    [InlineData(ConnectivityLevel.None)]
+    [InlineData(UnknownValue.Placeholder)]
+    public void Any_skips_profiles_that_cannot_be_shared(string unusableLevel)
+    {
+        _connectivity.AddProfile(unusableLevel, "不能用的网卡");
 
         var code = Service().Run(Options.Parse(new[] { "--any" }));
 
         Assert.Equal(ExitCode.NoUpstream, code);
-        Assert.Contains("没有任何已连接的网卡", _log.Text);
+        Assert.Equal(0, _tethering.CreateCallCount);
+        Assert.Contains("跳过 不能用的网卡", _log.Text);
+    }
+
+    /// <summary>某一条连接查不通时跳过它继续找,不能让一条坏网卡把整轮挑选带走。</summary>
+    [Fact]
+    public void Any_keeps_going_when_one_profile_read_throws()
+    {
+        var broken = _connectivity.AddProfile(ConnectivityLevel.InternetAccess, "坏网卡");
+        broken.LevelError = new InvalidOperationException("模拟读等级失败");
+        var good = _connectivity.AddProfile(ConnectivityLevel.InternetAccess, "好网卡");
+
+        var code = Service().Run(Options.Parse(new[] { "--any" }));
+
+        Assert.Equal(ExitCode.Ok, code);
+        Assert.Same(good, _connectivity.LastNamedProfile);
+        Assert.Contains("读连接等级失败", _log.Text);
+        Assert.Contains("模拟读等级失败", _log.Text);
+    }
+
+    /// <summary>
+    /// 读连接列表本身就失败(典型:这台机器解析不到 WinRT 类型)时,必须是干净的
+    /// 退出码 2,而不是让异常逃到顶层变成 1(FATAL + 一屏堆栈)。
+    /// 这条是"两条等待路径健壮性要一致"的回归锁。
+    /// </summary>
+    [Fact]
+    public void Any_enumeration_failure_returns_NoUpstream_not_Fatal()
+    {
+        _connectivity.ProfilesError = new TypeLoadException("找不到 WinRT 类型: 模拟");
+
+        var code = Service().Run(Options.Parse(new[] { "--any" }));
+
+        Assert.Equal(ExitCode.NoUpstream, code);
+        Assert.Contains("枚举连接配置失败", _log.Text);
+        Assert.Contains("TypeLoadException", _log.Text);
+    }
+
+    /// <summary>--any 但一个可用的连接都没有 → 退出码 2,提示先接网线 / 连 Wi-Fi。</summary>
+    [Fact]
+    public void Any_without_any_connection_returns_NoUpstream()
+    {
+        var code = Service().Run(Options.Parse(new[] { "--any" }));
+
+        Assert.Equal(ExitCode.NoUpstream, code);
+        Assert.Contains("没有任何可用的连接", _log.Text);
     }
 
     /// <summary>--any 只影响"开"这个动作,--off / --status 的路径不受它影响。</summary>
@@ -194,7 +327,7 @@ public class HotspotServiceTests
         Assert.Equal(ExitCode.Ok, Service().Run(Options.Parse(new[] { "--off", "--any" })));
         Assert.Equal(ExitCode.Ok, Service().Run(Options.Parse(new[] { "--status", "--any" })));
 
-        Assert.Equal(0, _connectivity.SelectCount);
+        Assert.Equal(0, _connectivity.EnumerationCount);
     }
 
     // ===================================================================
@@ -287,8 +420,8 @@ public class HotspotServiceTests
     [Fact]
     public void Logs_profile_name_and_connectivity_level()
     {
-        _connectivity.ProfileName = "PPPoE-宽带";
-        _connectivity.ConnectivityLevel = "LocalAccess";
+        _connectivity.DefaultProfileName = "PPPoE-宽带";
+        _connectivity.DefaultConnectivityLevel = "LocalAccess";
 
         Service().Run(Options.Parse(new string[0]));
 

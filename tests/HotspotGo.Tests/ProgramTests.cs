@@ -1,17 +1,22 @@
 using System;
+using HotspotGo.Cli;
 using Xunit;
 
 namespace HotspotGo.Tests;
 
 /// <summary>
-/// 入口的"启动 / 结束 / 顶层异常兜底"。
+/// 入口的"启动 / 结束 / 顶层异常兜底",以及参数层面的分流。
 ///
 /// 本程序是 WinExe,出问题时用户只能看 log.txt,所以"每次运行都留下首尾两行、
 /// 致命异常原样留档"是硬约定(冒烟脚本也靠首尾两行判定日志完整)。
 /// 这里把这条约定钉死 —— 它是唯一保证"程序炸了还留得下线索"的地方。
 ///
-/// 注意这里测的是 <see cref="Program.Execute"/> 这段框架逻辑,不是真实开热点;
-/// 真实链路仍由冒烟脚本跑 exe 覆盖。
+/// <see cref="Program.Preflight"/> 那一组守的是另一条硬约定:本工具不带参数就是
+/// "开热点",所以无法识别的参数必须被拦住、不能回落成默认动作 ——
+/// 否则 <c>--off</c> 敲错一个字会把热点开起来,方向正好相反。
+///
+/// 注意这里测的是 <see cref="Program.Execute"/> / <see cref="Program.Preflight"/>
+/// 这段框架逻辑,不是真实开热点;真实链路仍由冒烟脚本跑 exe 覆盖。
 /// </summary>
 public class ProgramTests
 {
@@ -72,5 +77,65 @@ public class ProgramTests
         Program.Execute(log, new string[0], () => throw new InvalidOperationException("模拟顶层异常"));
 
         Assert.Contains("===== 结束 =====", log.Text);
+    }
+
+    // ===================================================================
+    // 参数层分流:--help / 无法识别的参数
+    // ===================================================================
+
+    /// <summary>
+    /// --help:写用法说明,退出码 0(这是一次成功的请求,不是错误)。
+    /// 说明必须落 log.txt —— 无控制台,那是唯一出口。
+    /// </summary>
+    [Fact]
+    public void Preflight_writes_usage_and_succeeds_for_help()
+    {
+        var log = new FakeLogger();
+
+        ExitCode? code = Program.Preflight(log, Options.Parse(new[] { "--help" }));
+
+        Assert.True(code.HasValue);
+        Assert.Equal(ExitCode.Ok, code.Value);
+        Assert.Contains("用法:HotspotGo.exe", log.Text);
+        Assert.Contains("--off", log.Text);
+    }
+
+    /// <summary>
+    /// 无法识别的参数:一律不执行任何操作(退出码 5),并把参数名与说明都记下来。
+    /// 这是"手误不该反向执行"的最后一道闸 —— 落到业务层就晚了。
+    /// </summary>
+    [Fact]
+    public void Preflight_rejects_unknown_arguments()
+    {
+        var log = new FakeLogger();
+
+        ExitCode? code = Program.Preflight(log, Options.Parse(new[] { "--pff" }));
+
+        Assert.True(code.HasValue);
+        Assert.Equal(ExitCode.BadArguments, code.Value);
+        Assert.Contains("--pff", log.Text);
+        Assert.Contains("本次不做任何操作", log.Text);
+    }
+
+    /// <summary>参数正常时不做任何输出、也不决定退出码,纯粹放行给业务服务。</summary>
+    [Fact]
+    public void Preflight_lets_valid_options_through_silently()
+    {
+        var log = new FakeLogger();
+
+        Assert.Null(Program.Preflight(log, Options.Parse(new[] { "--status" })));
+        Assert.Equal(string.Empty, log.Text);
+    }
+
+    /// <summary>用户明确要看说明时,说明比报错有用:--help 优先于未知参数。</summary>
+    [Fact]
+    public void Preflight_prefers_help_over_unknown_arguments()
+    {
+        var log = new FakeLogger();
+
+        ExitCode? code = Program.Preflight(log, Options.Parse(new[] { "--pff", "--help" }));
+
+        Assert.True(code.HasValue);
+        Assert.Equal(ExitCode.Ok, code.Value);
     }
 }

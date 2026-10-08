@@ -21,6 +21,8 @@ namespace HotspotGo.WinRT;
 ///
 /// 错误约定:类型 / 成员不可用时<b>抛异常</b>,由调用方决定怎么记录;
 /// 方法执行成功但返回 null 属于业务语义,由调用方判断。
+/// 两个实例调用入口按用途分工:<see cref="InvokeInstance"/> 抛异常(要原因时用),
+/// <see cref="SafeInvoke"/> 吞异常返回 null(诊断路径用,不许打断整轮探测)。
 /// </summary>
 internal static class WinrtReflection
 {
@@ -85,14 +87,18 @@ internal static class WinrtReflection
     // TetheringApi.ToggleAndWait 轮询 TetheringOperationalState 判断成败。
 
     /// <summary>
-    /// 调用实例成员,依次尝试:
+    /// 调用实例成员,失败抛异常 —— 需要拿到"为什么失败"时用它(见
+    /// <see cref="TetheringApi.ToggleAndWait"/>:"开热点被拒绝"的原因只在异常里)。
+    /// 诊断路径请用 <see cref="SafeInvoke"/>,那条路不允许打断整轮探测。
+    ///
+    /// 依次尝试:
     ///   1. 同名公共无参方法
     ///   2. 同名公共属性
     ///   3. 去掉 Async 后缀的同名方法 / 属性(WinRT 投影差异)
     ///   4. 大小写不敏感的同名无参方法
     /// 找不到抛 <see cref="MissingMethodException"/>。
     /// </summary>
-    private static object InvokeInstance(object target, string memberName)
+    public static object InvokeInstance(object target, string memberName)
     {
         if (target == null) return null;
         var type = target.GetType();

@@ -8,6 +8,10 @@ namespace HotspotGo.Tests.Cli;
 ///
 /// 这是本工具对外的唯一接口面 —— README 的命令表、用户的计划任务、脚本都直接依赖它,
 /// 所以每个开关的语义都锁死在这里。
+///
+/// 其中两条是"别因为手误把命令执行反了"的锁:本工具不带参数就是开热点,
+/// 所以 <c>--wait</c> 不能吞掉后面的开关,无法识别的参数也必须被记下来
+/// (由 <c>Program.Preflight</c> 拒绝执行)。
 /// </summary>
 public class OptionsTests
 {
@@ -20,6 +24,8 @@ public class OptionsTests
         Assert.Equal(HotspotCommand.TurnOn, options.Command);
         Assert.Equal(Options.DefaultMaxWaitSeconds, options.MaxWaitSeconds);
         Assert.False(options.UseAnyConnection);
+        Assert.False(options.HelpRequested);
+        Assert.Empty(options.UnknownArguments);
     }
 
     /// <summary>默认等待秒数是 90(README 里写明的值)。</summary>
@@ -66,6 +72,37 @@ public class OptionsTests
         var options = Options.Parse(new[] { "--wait", badValue });
 
         Assert.Equal(Options.DefaultMaxWaitSeconds, options.MaxWaitSeconds);
+        // 取值位置上的 token 是"被消费"的,不该再被算成无法识别的参数
+        Assert.Empty(options.UnknownArguments);
+    }
+
+    /// <summary>
+    /// 超出范围的取值同样按非法处理,并且消费掉该 token。
+    ///
+    /// 上限不是洁癖:本工具会被放进登录脚本,而"等上游"是前台阻塞等待,
+    /// 多敲一个 0 能把登录拖住几小时,比"退回默认的 90 秒"糟糕得多。
+    /// </summary>
+    [Theory]
+    [InlineData("-5")]
+    [InlineData("-1")]
+    [InlineData("86401")]
+    [InlineData("999999999")]
+    public void Parse_wait_out_of_range_keeps_default(string badValue)
+    {
+        var options = Options.Parse(new[] { "--wait", badValue });
+
+        Assert.Equal(Options.DefaultMaxWaitSeconds, options.MaxWaitSeconds);
+        Assert.Empty(options.UnknownArguments);
+    }
+
+    /// <summary>边界值要能用:0(只查一次)和上限(24 小时)。</summary>
+    [Theory]
+    [InlineData("0")]
+    [InlineData("90")]
+    [InlineData("86400")]
+    public void Parse_wait_accepts_values_in_range(string value)
+    {
+        Assert.Equal(int.Parse(value), Options.Parse(new[] { "--wait", value }).MaxWaitSeconds);
     }
 
     /// <summary>--wait 位于参数末尾(后面没有值)时不越界,保持默认值。</summary>
@@ -73,6 +110,33 @@ public class OptionsTests
     public void Parse_wait_without_following_value_keeps_default()
     {
         Assert.Equal(Options.DefaultMaxWaitSeconds, Options.Parse(new[] { "--wait" }).MaxWaitSeconds);
+    }
+
+    /// <summary>
+    /// --wait 后面跟着另一个开关时,不能把那个开关当取值吃掉。
+    ///
+    /// 否则 <c>HotspotGo.exe --wait --status</c> 会把只读命令吞成"开热点",
+    /// 而且退出码还是 0 —— 用户以为在看状态,实际改动了系统。
+    /// </summary>
+    [Fact]
+    public void Parse_wait_does_not_swallow_a_following_switch()
+    {
+        var options = Options.Parse(new[] { "--wait", "--status" });
+
+        Assert.Equal(HotspotCommand.Status, options.Command);
+        Assert.Equal(Options.DefaultMaxWaitSeconds, options.MaxWaitSeconds);
+        Assert.Empty(options.UnknownArguments);
+    }
+
+    /// <summary>短开关(--help 的等价写法)同样不能被 --wait 吞掉。</summary>
+    [Fact]
+    public void Parse_wait_does_not_swallow_help()
+    {
+        var options = Options.Parse(new[] { "--wait", "-h" });
+
+        Assert.True(options.HelpRequested);
+        Assert.Equal(Options.DefaultMaxWaitSeconds, options.MaxWaitSeconds);
+        Assert.Empty(options.UnknownArguments);
     }
 
     /// <summary>同一开关出现多次时,最后出现的生效。</summary>
@@ -83,14 +147,44 @@ public class OptionsTests
         Assert.Equal(15, Options.Parse(new[] { "--wait", "60", "--wait", "15" }).MaxWaitSeconds);
     }
 
-    /// <summary>未知参数静默忽略(启动日志会原样记录 args,便于排查手误)。</summary>
+    /// <summary>
+    /// 无法识别的参数被记下来(而不是静默忽略),由 <c>Program.Preflight</c> 拒绝执行 ——
+    /// 否则 <c>--pff</c>(<c>--off</c> 敲错)会落到"开热点"这个默认动作上。
+    /// 解析本身仍然照常产出结果,好在测试里把"解析"和"怎么处理"分开验。
+    /// </summary>
     [Fact]
-    public void Parse_ignores_unknown_arguments()
+    public void Parse_records_unknown_arguments()
     {
         var options = Options.Parse(new[] { "-x", "--unknown", "stray", "--wait", "15", "--status" });
 
         Assert.Equal(HotspotCommand.Status, options.Command);
         Assert.Equal(15, options.MaxWaitSeconds);
+        Assert.Equal(new[] { "-x", "--unknown", "stray" }, options.UnknownArguments);
+    }
+
+    /// <summary>--help 的四种写法都算"要看说明"。</summary>
+    [Theory]
+    [InlineData("--help")]
+    [InlineData("-h")]
+    [InlineData("-?")]
+    [InlineData("/?")]
+    public void Parse_recognizes_help_switches(string flag)
+    {
+        Assert.True(Options.Parse(new[] { flag }).HelpRequested);
+    }
+
+    /// <summary>
+    /// 说明请求独立于命令:出现在参数里任意位置都算数,
+    /// 不跟着"同一开关出现多次时后者生效"那条规则走(<c>--help --status</c> 要看的是说明)。
+    /// </summary>
+    [Fact]
+    public void Parse_help_is_independent_of_the_command()
+    {
+        var options = Options.Parse(new[] { "--help", "--status" });
+
+        Assert.True(options.HelpRequested);
+        Assert.Equal(HotspotCommand.Status, options.Command);
+        Assert.Empty(options.UnknownArguments);
     }
 
     /// <summary>参数顺序不影响解析结果。</summary>

@@ -18,5 +18,6 @@ public class ExitCodeTests
         Assert.Equal(2, (int)ExitCode.NoUpstream);
         Assert.Equal(3, (int)ExitCode.NoManager);
         Assert.Equal(4, (int)ExitCode.StartFailed);
+        Assert.Equal(5, (int)ExitCode.BadArguments);
     }
 }
