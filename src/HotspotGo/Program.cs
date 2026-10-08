@@ -14,8 +14,9 @@ namespace HotspotGo;
 /// (<see cref="IConnectivityApi"/> / <see cref="ITetheringApi"/>),
 /// 真实实现在这里接上去,所以依赖方向是单向朝内的。
 ///
-/// 组件是 WinExe(运行时无窗口无控制台),log.txt 是唯一排障入口,
-/// 因此启动 / 结束 / 任何致命异常都必须落日志 —— 用法说明也一样写进日志。
+/// 日志同时去两个地方:exe 同目录的 log.txt(永远是权威记录 —— 终端一关就没了,
+/// 而本工具要在事发之后还能查),以及终端(有终端在看时,见 <see cref="Terminal"/>)。
+/// log.txt 优先:启动 / 结束 / 任何致命异常都必须落进它,用法说明也一样。
 ///
 /// 退出码语义见 <see cref="ExitCode"/>;业务流程见 <see cref="HotspotService"/>。
 /// </summary>
@@ -27,11 +28,21 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
-        var logger = new AppendFileLogger(LogFileName);
+        // 第一件事,必须在任何输出之前:判断这次有没有人在看终端,
+        // 并把"系统为本次启动新建的控制台窗口"藏掉(双击 / 启动文件夹)。
+        // 判定结果显式往下传,不藏在静态状态里 —— 数据流一眼看得出,也不用猜谁改过它。
+        TerminalSetup terminal = Terminal.Prepare();
+
+        ILogger logger = BuildLogger(terminal);
         var options = Options.Parse(args);
 
         return Execute(logger, args, () =>
         {
+            // 把"这次对终端做了什么"也记一笔:双击 / 开机自启时终端上什么都没显示,
+            // 事后能回答"为什么没反应"的只有这一行(见 TerminalSetup.Describe)。
+            logger.WriteLine("  终端输出:" + (terminal.WriteToTerminal ? "开" : "关") +
+                "(" + terminal.Describe() + ")");
+
             ExitCode? preflight = Preflight(logger, options);
             if (preflight.HasValue) return (int)preflight.Value;
 
@@ -41,14 +52,28 @@ internal static class Program
     }
 
     /// <summary>
+    /// 装配日志:log.txt 永远写;有人在看终端时再镜像一份过去。
+    /// 没有终端时(见 <see cref="TerminalSetup.WriteToTerminal"/>)只剩文件那份 ——
+    /// 这正是双击 / 开机自启时的样子:不打扰,但事后有据可查。
+    /// </summary>
+    private static ILogger BuildLogger(TerminalSetup terminal)
+    {
+        var fileLog = new AppendFileLogger(LogFileName);
+
+        return terminal.WriteToTerminal
+            ? new MirrorLogger(fileLog, new ConsoleLogger())
+            : (ILogger)fileLog;
+    }
+
+    /// <summary>
     /// 参数层面的分流:该不该执行、退出码是什么。返回 null = 参数没问题,交给业务服务。
     ///
     /// 为什么必须有这一步:本工具不带参数就是"开热点",所以任何无法识别的参数都必须
     /// 在这里被拦住,而不是回落成默认动作 —— 否则 <c>--pff</c>(<c>--off</c> 敲错)
     /// 会反过来把热点开起来,方向正好相反。
     ///
-    /// <c>--help</c> 优先于未知参数:用户明确要看说明时,说明比报错有用。
-    /// 说明写进 log.txt(无控制台,这是唯一出口,见 <see cref="UsageText"/>)。
+    /// <c>--help</c> 与 <c>--version</c> 优先于未知参数:用户明确要看说明 / 版本时,
+    /// 那比报错有用。两者都写进 log.txt(说明见 <see cref="UsageText"/>、<see cref="VersionText"/>)。
     /// </summary>
     /// <returns>该就地结束时的退出码;null 表示继续执行业务流程。</returns>
     internal static ExitCode? Preflight(ILogger logger, Options options)
@@ -57,6 +82,14 @@ internal static class Program
         {
             logger.WriteLine("[帮助] 用法说明:");
             WriteUsage(logger);
+            return ExitCode.Ok;
+        }
+
+        if (options.VersionRequested)
+        {
+            // 版本号取自程序集自身(发布时按 tag 注入),不在代码里另写一份常量 ——
+            // 否则迟早会与 exe 文件属性对不上。见 VersionText。
+            foreach (var line in VersionText.Build()) logger.WriteLine(line);
             return ExitCode.Ok;
         }
 

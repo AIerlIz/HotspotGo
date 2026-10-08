@@ -19,12 +19,13 @@ internal enum HotspotCommand
 /// <summary>
 /// 命令行选项。用法:
 /// <code>
-///   HotspotGo.exe              等上游就绪后开启热点(默认最多等 90 秒)
-///   HotspotGo.exe --any        不等外网,直接用当前可用连接开启热点
-///   HotspotGo.exe --status     只看状态,不做任何改动
-///   HotspotGo.exe --off        关闭热点
-///   HotspotGo.exe --wait 120   自定义最长等待秒数(0 - 86400)
-///   HotspotGo.exe --help       显示用法说明
+///   HotspotGo.exe                         等上游就绪后开启热点(默认最多等 90 秒)
+///   HotspotGo.exe -a / --any              不等外网,直接用当前可用连接开启热点
+///   HotspotGo.exe -s / --status           只看状态,不做任何改动
+///   HotspotGo.exe -o / --off              关闭热点
+///   HotspotGo.exe -w 120 / --wait 120     自定义最长等待秒数(0 - 86400)
+///   HotspotGo.exe -h / --help             显示用法说明
+///   HotspotGo.exe -v / --version          显示版本信息
 /// </code>
 /// 解析策略 —— 三条都是为同一个目标服务的:<b>别因为手误把命令执行反了</b>
 /// (本工具"不带参数"就是开热点,任何回落成默认动作的解析歧义都会让
@@ -37,6 +38,13 @@ internal enum HotspotCommand
 ///       <c>HotspotGo.exe --wait --status</c> 会把只读命令吞成开热点。</item>
 ///     <item><c>--wait</c> 取值非法(非数字 / 负数 / 超过上限)时消费掉该 token,
 ///       但保持默认值(不抛异常,本次运行照常进行)。</item>
+///     <item>一套开关只给两种拼法:长开关两个横线(<c>--status</c>),短写一个横线(<c>-s</c>)。
+///       单横线的<b>长</b>写法(<c>-status</c>)不认 —— 少一种"看起来也行"的拼法就少一处歧义,
+///       而短写已经把同样的意图覆盖了;真敲错了会按无法识别处理并打印用法。</item>
+///     <item>短写是<b>显式列出来</b>的,不是"取长开关首字母"推出来的:六个字母互不冲突,
+///       而推导会在以后加开关时(比如再来两个 <c>--s</c> 打头的)悄悄改变已有短写的含义。</item>
+///     <item>不做前缀匹配、不做拼写猜测:<c>-st</c> 不会被当成 <c>--status</c> ——
+///       本工具不带参数就是"开热点",猜错方向的代价比直接报错大得多。</item>
 ///   </list>
 /// 本类只做解析,不做判定,也不抛异常 —— 拒绝执行是 <c>Program.Preflight</c> 的事。
 /// </summary>
@@ -78,6 +86,12 @@ internal sealed class Options
     public bool HelpRequested { get; private set; }
 
     /// <summary>
+    /// 是否请求版本信息(对应 <c>--version</c> / <c>-v</c>)。
+    /// 与 <see cref="HelpRequested"/> 同样是"问一句就走"的请求,不参与"后者覆盖前者"。
+    /// </summary>
+    public bool VersionRequested { get; private set; }
+
+    /// <summary>
     /// 无法识别的参数(按出现顺序)。
     /// 非空时不允许执行任何操作 —— 见 <c>Program.Preflight</c>。
     /// </summary>
@@ -92,14 +106,17 @@ internal sealed class Options
             switch (args[i])
             {
                 case "--status":
+                case "-s":
                     options.Command = HotspotCommand.Status;
                     break;
 
                 case "--off":
+                case "-o":
                     options.Command = HotspotCommand.TurnOff;
                     break;
 
                 case "--any":
+                case "-a":
                     options.UseAnyConnection = true;
                     break;
 
@@ -110,7 +127,13 @@ internal sealed class Options
                     options.HelpRequested = true;
                     break;
 
+                case "--version":
+                case "-v":
+                    options.VersionRequested = true;
+                    break;
+
                 case "--wait":
+                case "-w":
                     // 取值开关消费紧随的 token;解析失败也消费,但保持默认值
                     if (i + 1 < args.Length && LooksLikeValue(args[i + 1]))
                     {

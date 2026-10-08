@@ -101,6 +101,49 @@ public class ProgramTests
     }
 
     /// <summary>
+    /// --version / -v:写版本信息,退出码 0。
+    /// 与 --help 一样是"问一句就走",不碰任何机器状态。
+    /// </summary>
+    [Fact]
+    public void Preflight_writes_version_and_succeeds()
+    {
+        var log = new FakeLogger();
+
+        ExitCode? code = Program.Preflight(log, Options.Parse(new[] { "-v" }));
+
+        Assert.True(code.HasValue);
+        Assert.Equal(ExitCode.Ok, code.Value);
+        Assert.Contains("热点快启 HotspotGo", log.Text);
+    }
+
+    /// <summary>两个都要时以说明为准 —— 说明里本来就写着版本怎么看。</summary>
+    [Fact]
+    public void Preflight_prefers_help_over_version()
+    {
+        var log = new FakeLogger();
+
+        ExitCode? code = Program.Preflight(log, Options.Parse(new[] { "-v", "-h" }));
+
+        Assert.True(code.HasValue);
+        Assert.Equal(ExitCode.Ok, code.Value);
+        Assert.Contains("用法:HotspotGo.exe", log.Text);
+        Assert.DoesNotContain("热点快启 HotspotGo", log.Text);
+    }
+
+    /// <summary>版本请求与无法识别的参数同时出现时,先出结果、不按报错处理(同 --help 的取舍)。</summary>
+    [Fact]
+    public void Preflight_prefers_version_over_unknown_arguments()
+    {
+        var log = new FakeLogger();
+
+        ExitCode? code = Program.Preflight(log, Options.Parse(new[] { "--pff", "-v" }));
+
+        Assert.True(code.HasValue);
+        Assert.Equal(ExitCode.Ok, code.Value);
+        Assert.Contains("热点快启 HotspotGo", log.Text);
+    }
+
+    /// <summary>
     /// 无法识别的参数:一律不执行任何操作(退出码 5),并把参数名与说明都记下来。
     /// 这是"手误不该反向执行"的最后一道闸 —— 落到业务层就晚了。
     /// </summary>

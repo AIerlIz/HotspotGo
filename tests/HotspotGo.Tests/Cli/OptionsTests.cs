@@ -174,6 +174,82 @@ public class OptionsTests
     }
 
     /// <summary>
+    /// 单横线的<b>长</b>写法不认:<c>-status</c> / <c>-wait</c> / <c>-off</c> 一律按无法识别处理。
+    ///
+    /// 一套开关只给两种拼法 —— 长开关两个横线、短写一个横线,而且短写已经把同样的意图都覆盖了。
+    /// 多留一种"看起来也行"的写法,只会让人分不清到底哪套才算数;真敲错了也有退出码 5 和用法说明接着。
+    /// </summary>
+    [Theory]
+    [InlineData("-status")]
+    [InlineData("-wait")]
+    [InlineData("-off")]
+    [InlineData("-any")]
+    [InlineData("-help")]
+    [InlineData("-version")]
+    public void Parse_rejects_single_dash_long_switches(string flag)
+    {
+        Assert.Equal(new[] { flag }, Options.Parse(new[] { flag }).UnknownArguments);
+    }
+
+    /// <summary>
+    /// 六个首字母短写:各归各的开关,互不串味。
+    /// 短写是显式列出来的,不是"取长开关首字母"推出来的 —— 后者在以后加开关时会悄悄改含义。
+    /// </summary>
+    [Fact]
+    public void Parse_accepts_short_switches()
+    {
+        Assert.Equal(HotspotCommand.Status, Options.Parse(new[] { "-s" }).Command);
+        Assert.Equal(HotspotCommand.TurnOff, Options.Parse(new[] { "-o" }).Command);
+        Assert.True(Options.Parse(new[] { "-a" }).UseAnyConnection);
+        Assert.Equal(30, Options.Parse(new[] { "-w", "30" }).MaxWaitSeconds);
+        Assert.True(Options.Parse(new[] { "-h" }).HelpRequested);
+        Assert.True(Options.Parse(new[] { "-v" }).VersionRequested);
+    }
+
+    /// <summary>短写不能被算成"无法识别的参数" —— 它们本来就是开关,不该触发退出码 5。</summary>
+    [Fact]
+    public void Parse_records_no_unknown_arguments_for_short_switches()
+    {
+        var options = Options.Parse(new[] { "-s", "-a", "-w", "15" });
+
+        Assert.Empty(options.UnknownArguments);
+        Assert.Equal(15, options.MaxWaitSeconds);
+    }
+
+    /// <summary>--wait 不能吞掉后面的开关:长写短写、混着写都不行。</summary>
+    [Theory]
+    [InlineData("--wait --status")]
+    [InlineData("--wait -s")]
+    [InlineData("-w --status")]
+    [InlineData("-w -s")]
+    public void Parse_wait_never_swallows_a_following_switch(string commandLine)
+    {
+        var options = Options.Parse(commandLine.Split(' '));
+
+        Assert.Equal(HotspotCommand.Status, options.Command);
+        Assert.Equal(Options.DefaultMaxWaitSeconds, options.MaxWaitSeconds);
+        Assert.Empty(options.UnknownArguments);
+    }
+
+    /// <summary>版本请求只认 --version 与 -v,不牵连别的开关。</summary>
+    [Fact]
+    public void Parse_recognizes_version_switches()
+    {
+        Assert.True(Options.Parse(new[] { "--version" }).VersionRequested);
+        Assert.True(Options.Parse(new[] { "-v" }).VersionRequested);
+        Assert.False(Options.Parse(new[] { "-s" }).VersionRequested);
+    }
+
+    /// <summary>拼错的名字要报错,而且报的是用户真正敲的那个写法(不做归一化、也不猜)。</summary>
+    [Fact]
+    public void Parse_still_rejects_unknown_arguments()
+    {
+        var options = Options.Parse(new[] { "-x", "-stauts", "--stauts" });
+
+        Assert.Equal(new[] { "-x", "-stauts", "--stauts" }, options.UnknownArguments);
+    }
+
+    /// <summary>
     /// 说明请求独立于命令:出现在参数里任意位置都算数,
     /// 不跟着"同一开关出现多次时后者生效"那条规则走(<c>--help --status</c> 要看的是说明)。
     /// </summary>

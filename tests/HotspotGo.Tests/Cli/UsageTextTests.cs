@@ -22,9 +22,23 @@ public class UsageTextTests
     [InlineData("--status")]
     [InlineData("--off")]
     [InlineData("--help")]
+    [InlineData("--version")]
     public void Usage_documents_every_switch(string flag)
     {
         Assert.Contains(flag, All);
+    }
+
+    /// <summary>短写也要写出来(排版是"-s, --status"),否则用户不知道短写能用。</summary>
+    [Theory]
+    [InlineData("-w")]
+    [InlineData("-a")]
+    [InlineData("-s")]
+    [InlineData("-o")]
+    [InlineData("-h")]
+    [InlineData("-v")]
+    public void Usage_documents_short_switches(string flag)
+    {
+        Assert.Contains(flag + ",", All);
     }
 
     /// <summary>退出码表要在说明里,且包含新增的"参数无法识别"。</summary>
@@ -36,6 +50,19 @@ public class UsageTextTests
         Assert.Contains("3 拿不到热点管理器", All);
         Assert.Contains("4 开启失败", All);
         Assert.Contains("5 参数无法识别", All);
+    }
+
+    /// <summary>
+    /// 说明里要把两种拼法的规则讲清楚(长开关两个横线、短写一个横线)。
+    ///
+    /// 这条尤其要紧:单横线的长写法是<b>不认</b>的,用户敲了 <c>-status</c> 之后
+    /// 只能从这段说明里看出为什么 —— 而当初就是有人这么敲的。
+    /// </summary>
+    [Fact]
+    public void Usage_states_how_long_and_short_forms_are_spelled()
+    {
+        Assert.Contains("两个横线", All);
+        Assert.Contains("一个横线", All);
     }
 
     /// <summary>

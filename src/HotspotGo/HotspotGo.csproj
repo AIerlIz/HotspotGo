@@ -9,8 +9,8 @@
       因此**不需要随程序分发 Microsoft.Windows.SDK.NET.dll**(约 24 MB)。
       .NET 5+ 没有这个能力,必须带那个投影程序集。
 
-      收益:产物约 35 KB(Release 实测 35840 字节,其中图标约 15 KB),且 Win10/11 自带
-      .NET Framework 4.8,目标机零安装。
+      收益:产物约 40 KB(Release 实测 40960 字节:图标约 15 KB,终端 / 版本支持约 5 KB),
+      且 Win10/11 自带 .NET Framework 4.8,目标机零安装。
       (加图标前是 20480 字节。图标只放 16/32/48/256 四个尺寸就是为了这个:
        ICO 里的 64 / 128 是未压缩位图,光 128 一张就 65 KB —— 体积是这个项目的一个卖点,
        不该为了图标把它翻几倍。要改图标见 scripts/make-icon.py。)
@@ -19,7 +19,19 @@
       计划任务要指向本 exe 时,以这里的实际输出路径为准。
   -->
   <PropertyGroup>
-    <OutputType>WinExe</OutputType>
+    <!--
+      ★ 为什么是控制台子系统(Exe)而不是 WinExe:
+        这决定了"从终端里跑"这件事成不成立。WinExe 是 GUI 子系统,shell 不会等它 ——
+        实测进程真实跑 125ms,而 PowerShell 的 & 调用 3ms 就返回了,于是输出落在提示符
+        之后,$LASTEXITCODE 也拿不到(还是上一条命令的值)。换成控制台子系统后,
+        shell 正常等待,管道 / 重定向 / 退出码才都成立。
+
+        代价是双击 / 启动文件夹启动时 Windows 会新建一个控制台窗口 —— 那正是这台工具
+        要避免的(开机自启弹黑窗)。所以启动第一件事就是判断这个控制台是哪来的,
+        是系统为我们新建的就藏掉窗口,是从 cmd / PowerShell 继承来的就绝不碰
+        —— 见 src/HotspotGo/Cli/Terminal.cs(判别规则有单元测试钉着)。
+    -->
+    <OutputType>Exe</OutputType>
     <TargetFramework>net48</TargetFramework>
     <LangVersion>latest</LangVersion>
     <AssemblyName>HotspotGo</AssemblyName>
