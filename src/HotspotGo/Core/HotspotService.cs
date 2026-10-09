@@ -168,7 +168,7 @@ internal sealed class HotspotService
             // 枚举连接列表本身失败(典型:这台机器解析不到 WinRT 类型)。
             // 在这里兜住,退出码才是明确的 2(没有可用连接),
             // 而不是逃到顶层变成 1(FATAL + 一屏堆栈,看日志的人还得自己判断这是环境问题)。
-            _log.WriteLine("[错误] 枚举连接配置失败: " + Describe(ex));
+            _log.WriteLine("[错误] 枚举连接配置失败: " + ExceptionText.Describe(ex));
             return null;
         }
 
@@ -226,7 +226,7 @@ internal sealed class HotspotService
         }
         catch (Exception ex)
         {
-            _log.WriteLine("[错误] CreateFromConnectionProfile: " + Describe(ex));
+            _log.WriteLine("[错误] CreateFromConnectionProfile: " + ExceptionText.Describe(ex));
             return null;
         }
     }
@@ -296,12 +296,12 @@ internal sealed class HotspotService
         }
         catch (Exception ex)
         {
-            _log.WriteLine("[错误] 开/关热点异常: " + Describe(ex));
+            _log.WriteLine("[错误] 开/关热点异常: " + ExceptionText.Describe(ex));
 
             // 读状态本身也可能抛(例如管理器对象在等待期间失效),所以这里不能直接调 ReadState ——
             // 那会让"已经决定要折叠异常"的这一步反而抛出异常。
             return ToggleResult.Failure(
-                ReadSafely(() => _tethering.ReadState(manager), "热点状态"), Describe(ex));
+                ReadSafely(() => _tethering.ReadState(manager), "热点状态"), ExceptionText.Describe(ex));
         }
     }
 
@@ -322,11 +322,8 @@ internal sealed class HotspotService
         }
         catch (Exception ex)
         {
-            _log.WriteLine("[错误] 读" + what + "失败: " + Describe(ex));
+            _log.WriteLine("[错误] 读" + what + "失败: " + ExceptionText.Describe(ex));
             return UnknownValue.Placeholder;
         }
     }
-
-    /// <summary>异常写成一行,带类型名 —— 只留 Message 的话,不同故障看起来会一模一样。</summary>
-    private static string Describe(Exception ex) => ex.GetType().Name + ": " + ex.Message;
 }

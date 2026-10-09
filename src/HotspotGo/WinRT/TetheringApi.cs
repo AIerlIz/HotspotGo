@@ -101,8 +101,10 @@ internal static class TetheringApi
         }
         catch (Exception ex)
         {
+            // 交给 ExceptionText 而不是自己拼"类型名 + Message":反射会把真原因包进
+            // TargetInvocationException,只读最外层的话这里就只剩一句"调用的目标发生了异常"。
             return ToggleResult.Failure(stateBefore,
-                "调用 " + operation + " 异常: " + ex.GetType().Name + ": " + ex.Message);
+                "调用 " + operation + " 异常: " + ExceptionText.Describe(ex));
         }
 
         if (asyncOperation == null)
